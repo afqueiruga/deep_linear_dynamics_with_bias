@@ -232,3 +232,7 @@
 - Added direct learnable-fit metric for each model:
   - `learnable_target_err = ||A_hat P_x - A*_learnable||_F`
 - This complements `support_fit_err = ||(A_hat - A*) P_x||_F` (numerically equivalent up to floating-point error).
+
+### Hypothesis (Experiment 2)
+- When `A*` is full-rank and `X` is low-rank, only `A*_learnable = A* U U^T` (support of training data) is identifiable.
+- Hypothesis: deep linear models will recover the learnable support component and drive their own nullspace component (`A_hat (I-UU^T)`) toward zero, while shallow linear models will retain a larger nullspace component.
