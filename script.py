@@ -20,6 +20,8 @@ def effective_rank(s, eps=1e-12):
 
 @torch.no_grad()
 def make_error_projectors(A_star, k):
+    # Build projectors onto the rank-k row/column support of A* from its SVD:
+    # A* = U_k S_k V_k^T, with P_left = U_k U_k^T and P_right = V_k V_k^T.
     U, _, Vh = torch.linalg.svd(A_star, full_matrices=True)
     U_k = U[:, :k]
     V_k = Vh[:k, :].T
@@ -42,6 +44,7 @@ def summarize_A(
     P_left_perp=None,
     P_right_perp=None,
 ):
+    # Generic spectrum/size diagnostics for an end-to-end map A.
     sv = torch.linalg.svdvals(A)
     sv = torch.sort(sv, descending=True).values
     fro = torch.linalg.norm(A, ord="fro").item()
@@ -66,6 +69,10 @@ def summarize_A(
         and P_left_perp is not None
         and P_right_perp is not None
     ):
+        # Error decomposition for E = A - A*:
+        # support component  : P_left E P_right
+        # null component     : (I - P_left) E (I - P_right)
+        # mixed component    : everything else (cross terms)
         err_support = P_left @ err @ P_right
         err_null = P_left_perp @ err @ P_right_perp
         err_mixed = err - err_support - err_null
@@ -75,6 +82,9 @@ def summarize_A(
                 "err_support": err_support.norm().item(),
                 "err_null": err_null.norm().item(),
                 "err_mixed": err_mixed.norm().item(),
+                # Fraction of total error norm ||E||_F in each subspace component.
+                # support_frac near 1.0 means most error lies inside A*'s support.
+                # null_frac near 1.0 means most error lies in A*'s orthogonal nullspace.
                 "err_support_frac": (err_support.norm() / err_norm).item(),
                 "err_null_frac": (err_null.norm() / err_norm).item(),
                 "err_mixed_frac": (err_mixed.norm() / err_norm).item(),
@@ -120,6 +130,7 @@ epochs = 50
 batch_size = 512
 svd_every_epochs = 5     # compute SVD metrics only every few epochs
 rank_thresh = 1e-2
+# Fixed projectors from A* used to track how training error moves across subspaces.
 P_left, P_right, P_left_perp, P_right_perp = make_error_projectors(A_star, k)
 
 def train_model(
@@ -162,6 +173,8 @@ def train_model(
         f"effR={m0['eff_rank']:.2f} numR={m0['num_rank']} "
         f"support={m0['err_support']:.3e} null={m0['err_null']:.3e}"
     )
+    # support_frac = ||P_left E P_right||_F / ||E||_F
+    # null_frac    = ||P_left_perp E P_right_perp||_F / ||E||_F
     print(f"{name} epoch | loss | rel_err | support_err | null_err | support_frac | null_frac")
 
     for epoch in range(1, epochs + 1):
