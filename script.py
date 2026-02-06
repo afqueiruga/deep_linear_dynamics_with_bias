@@ -99,6 +99,18 @@ def minibatches(X, Y, batch_size, generator=None):
         j = idx[i:i+batch_size]
         yield X[j], Y[j]
 
+class DeepLinear(nn.Module):
+    def __init__(self, d, m, r, init_scale=0.01, device="cpu"):
+        super().__init__()
+        self.W = nn.Parameter(init_scale * torch.randn(m, r, device=device))
+        self.U = nn.Parameter(init_scale * torch.randn(r, d, device=device))
+
+    def end_to_end(self):
+        return self.W @ self.U
+
+    def forward(self, x):
+        return x @ self.end_to_end().T
+
 # ----------------------------
 # Experiment
 # ----------------------------
@@ -118,10 +130,10 @@ A_star = make_low_rank_matrix(m, d, k, device=device)
 Y = X @ A_star.T
 
 # Models
-W = nn.Parameter(0.01 * torch.randn(m, r, device=device))
-U = nn.Parameter(0.01 * torch.randn(r, d, device=device))
-
-B = nn.Parameter(0.01 * torch.randn(m, d, device=device))  # shallow linear
+deep_model = DeepLinear(d=d, m=m, r=r, init_scale=0.01, device=device)
+shallow_model = nn.Linear(d, m, bias=False, device=device)
+with torch.no_grad():
+    nn.init.normal_(shallow_model.weight, mean=0.0, std=0.01)
 
 lr = 0.5
 
@@ -135,8 +147,7 @@ P_left, P_right, P_left_perp, P_right_perp = make_error_projectors(A_star, k)
 
 def train_model(
     name,
-    params,
-    predict_fn,
+    model,
     get_A_fn,
     X,
     Y,
@@ -153,14 +164,14 @@ def train_model(
     P_right_perp,
     seed=123,
 ):
-    opt = optim.SGD(params, lr=lr)
+    opt = optim.SGD(model.parameters(), lr=lr)
     loss_fn = nn.MSELoss()
     g = torch.Generator(device=device)
     g.manual_seed(seed)
 
     with torch.no_grad():
         m0 = summarize_A(
-            get_A_fn(),
+            get_A_fn(model),
             A_star,
             thresh=rank_thresh,
             P_left=P_left,
@@ -184,7 +195,7 @@ def train_model(
         for xb, yb in minibatches(X, Y, batch_size=batch_size, generator=g):
             steps += 1
             opt.zero_grad(set_to_none=True)
-            yhat = predict_fn(xb)
+            yhat = model(xb)
             loss = loss_fn(yhat, yb)
             loss.backward()
             opt.step()
@@ -195,7 +206,7 @@ def train_model(
         if epoch == 1 or epoch % svd_every_epochs == 0 or epoch == epochs:
             with torch.no_grad():
                 m = summarize_A(
-                    get_A_fn(),
+                    get_A_fn(model),
                     A_star,
                     thresh=rank_thresh,
                     P_left=P_left,
@@ -211,7 +222,7 @@ def train_model(
 
     with torch.no_grad():
         return summarize_A(
-            get_A_fn(),
+            get_A_fn(model),
             A_star,
             thresh=rank_thresh,
             topk=10,
@@ -228,9 +239,8 @@ with torch.no_grad():
     print("A* top-10 singular values:", s_star[:10].cpu().numpy())
 md = train_model(
     name="Deep",
-    params=[W, U],
-    predict_fn=lambda xb: xb @ (W @ U).T,
-    get_A_fn=lambda: W @ U,
+    model=deep_model,
+    get_A_fn=lambda model: model.end_to_end(),
     X=X,
     Y=Y,
     A_star=A_star,
@@ -247,9 +257,8 @@ md = train_model(
 )
 ms = train_model(
     name="Shallow",
-    params=[B],
-    predict_fn=lambda xb: xb @ B.T,
-    get_A_fn=lambda: B,
+    model=shallow_model,
+    get_A_fn=lambda model: model.weight,
     X=X,
     Y=Y,
     A_star=A_star,

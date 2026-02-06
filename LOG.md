@@ -51,3 +51,20 @@
 - Sweep learning rate and epochs to check if shallow nullspace error persists asymptotically.
 - Repeat over multiple seeds and report mean/std of final `null_err` and `null_frac`.
 - Compare against explicit regularization baselines (e.g., weight decay on `B`, nuclear-norm proxy diagnostics).
+
+### Update: Module refactor (DeepLinear + nn.Linear)
+- Refactored model definitions to `nn.Module` style:
+  - Added `DeepLinear(nn.Module)` with parameters `W`, `U`, `forward`, and `end_to_end()`.
+  - Replaced shallow raw parameter `B` with `nn.Linear(d, m, bias=False)`.
+- Updated `train_model(...)` to consume a `model` directly and optimize `model.parameters()`.
+- Matrix extraction for diagnostics now uses:
+  - Deep: `model.end_to_end()`
+  - Shallow: `model.weight`
+- Retained prior behavior and logging metrics, including support/null decomposition.
+
+### Validation run after refactor
+- Command: `python3.11 script.py`
+- Status: success.
+- Final decomposition (post-refactor run):
+  - Deep: `support=5.607e+00`, `null=2.437e-02`, `mixed=1.557e-01`
+  - Shallow: `support=3.326e+00`, `null=2.055e-01`, `mixed=1.639e-01`
