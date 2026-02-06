@@ -74,18 +74,22 @@ def summarize_A(
         # null component     : (I - P_left) E (I - P_right)
         # mixed component    : everything else (cross terms)
         err_support = P_left @ err @ P_right
+        err_outside = err - err_support
         err_null = P_left_perp @ err @ P_right_perp
         err_mixed = err - err_support - err_null
         err_norm = err.norm() + 1e-12
         out.update(
             {
                 "err_support": err_support.norm().item(),
+                "err_outside": err_outside.norm().item(),
                 "err_null": err_null.norm().item(),
                 "err_mixed": err_mixed.norm().item(),
                 # Fraction of total error norm ||E||_F in each subspace component.
                 # support_frac near 1.0 means most error lies inside A*'s support.
+                # outside_frac near 1.0 means most error lies outside A*'s support.
                 # null_frac near 1.0 means most error lies in A*'s orthogonal nullspace.
                 "err_support_frac": (err_support.norm() / err_norm).item(),
+                "err_outside_frac": (err_outside.norm() / err_norm).item(),
                 "err_null_frac": (err_null.norm() / err_norm).item(),
                 "err_mixed_frac": (err_mixed.norm() / err_norm).item(),
             }
@@ -194,11 +198,12 @@ def train_model(
     print(
         f"\n[{name} init] rel_err={m0['rel_err']:.3f} nuc={m0['nuc']:.3f} "
         f"effR={m0['eff_rank']:.2f} numR={m0['num_rank']} "
-        f"support={m0['err_support']:.3e} null={m0['err_null']:.3e}"
+        f"support={m0['err_support']:.3e} outside={m0['err_outside']:.3e} null={m0['err_null']:.3e}"
     )
     # support_frac = ||P_left E P_right||_F / ||E||_F
+    # outside_frac = ||E - P_left E P_right||_F / ||E||_F
     # null_frac    = ||P_left_perp E P_right_perp||_F / ||E||_F
-    print(f"{name} epoch | loss | rel_err | support_err | null_err | support_frac | null_frac | lr")
+    print(f"{name} epoch | loss | rel_err | support_err | outside_err | null_err | support_frac | outside_frac | null_frac | lr")
 
     for epoch in range(1, epochs + 1):
         loss_accum = 0.0
@@ -230,8 +235,8 @@ def train_model(
                 )
             print(
                 f"{name:7s} {epoch:5d} | {avg_loss:9.3e} | {m['rel_err']:.3e} | "
-                f"{m['err_support']:.3e} | {m['err_null']:.3e} | "
-                f"{m['err_support_frac']:.2f} | {m['err_null_frac']:.2f} | "
+                f"{m['err_support']:.3e} | {m['err_outside']:.3e} | {m['err_null']:.3e} | "
+                f"{m['err_support_frac']:.2f} | {m['err_outside_frac']:.2f} | {m['err_null_frac']:.2f} | "
                 f"lr={scheduler.get_last_lr()[0]:.3e}"
             )
 
@@ -314,12 +319,12 @@ print("\n[Final error decomposition]")
 for r in deep_widths:
     mr = deep_results[r]
     print(
-        "Deep(r={}) support={:.3e} null={:.3e} mixed={:.3e}".format(
-            r, mr["err_support"], mr["err_null"], mr["err_mixed"]
+        "Deep(r={}) support={:.3e} outside={:.3e} null={:.3e} mixed={:.3e}".format(
+            r, mr["err_support"], mr["err_outside"], mr["err_null"], mr["err_mixed"]
         )
     )
 print(
-    "Shallow support={:.3e} null={:.3e} mixed={:.3e}".format(
-        ms["err_support"], ms["err_null"], ms["err_mixed"]
+    "Shallow support={:.3e} outside={:.3e} null={:.3e} mixed={:.3e}".format(
+        ms["err_support"], ms["err_outside"], ms["err_null"], ms["err_mixed"]
     )
 )

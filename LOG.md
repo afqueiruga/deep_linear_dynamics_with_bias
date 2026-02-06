@@ -152,3 +152,23 @@
 
 #### Decision
 - Keep LR decay enabled for deep models (`deep_lr_decay_gamma=0.99`).
+
+### Metric clarification: `null_err` vs `outside_err`
+- Clarification from discussion:
+  - Current `null_err` is the two-sided orthogonal block
+    - `null_err = ||Q_left E Q_right||_F`, where `E = A_hat - A*`, `Q_left = I - P_left`, `Q_right = I - P_right`.
+  - This is **not** all error outside support.
+
+- 4-block decomposition view of `E` using row/column support projectors:
+  - inside support: `P_left E P_right`
+  - cross block 1: `P_left E Q_right`
+  - cross block 2: `Q_left E P_right`
+  - two-sided null block: `Q_left E Q_right`
+
+- New metric added to match the intended question "all error outside support":
+  - `outside_err = ||E - P_left E P_right||_F`
+  - This includes all three off-support blocks (`P_left E Q_right`, `Q_left E P_right`, and `Q_left E Q_right`).
+
+- Code updates in `script.py`:
+  - Added `err_outside` and `err_outside_frac` to `summarize_A(...)`.
+  - Updated init/epoch/final logging to include `outside_err` and `outside_frac`.
