@@ -267,3 +267,26 @@
 
 #### Observation
 - Under this longer/slower schedule, deep still has smaller nullspace mass than shallow, but `model_nullX_norm` for `Deep(r=500)` appears plateaued rather than continuing to decay toward zero.
+
+### Update: efficiency mode + spectral tracking
+- Experiment 1 is now disabled by default for efficiency:
+  - `run_experiment_1 = False`
+  - Script prints a message when skipped.
+- Added optional per-epoch spectral logging in `train_model(...)`:
+  - `top_sv_every_epochs` (cadence)
+  - `top_sv_k` (number of singular values)
+  - `top_sv_method` in `{exact, lowrank}`
+- Cheap option implemented:
+  - `top_sv_method="lowrank"` uses `torch.svd_lowrank(..., niter=2)` as an approximate top-spectrum tracker.
+- Experiment 2 currently uses:
+  - `top_sv_every_epochs_lowX = 200`
+  - `top_sv_k = 10`
+  - `top_sv_method_lowX = "lowrank"`
+- Validation:
+  - Confirmed Experiment 1 is skipped.
+  - Confirmed top-10 singular values are printed at configured cadence for deep and shallow models in Experiment 2.
+
+### Update: synchronized spectral logging cadence
+- Changed `top_sv_every_epochs_lowX` to match the main metric cadence exactly:
+  - `top_sv_every_epochs_lowX = svd_every_epochs_lowX`
+- Result: top singular-value snapshots are now printed whenever the standard metric line is printed.

@@ -157,6 +157,7 @@ epochs = 400
 batch_size = n
 svd_every_epochs = 20     # compute SVD metrics only every few epochs
 rank_thresh = 1e-2
+run_experiment_1 = False  # disabled for efficiency; set True to re-enable
 # Experiment-2-specific schedule to probe slow implicit regularization.
 epochs_lowX = 2000
 svd_every_epochs_lowX = 100
@@ -164,6 +165,9 @@ deep_lr_lowX = 1e-2
 deep_lr_decay_gamma_lowX = 0.999
 shallow_lr_lowX = 1e-2
 shallow_lr_decay_gamma_lowX = 1.0
+top_sv_every_epochs_lowX = svd_every_epochs_lowX
+top_sv_k = 10
+top_sv_method_lowX = "lowrank"  # "exact" or "lowrank"
 # Fixed projectors from A* used to track how training error moves across subspaces.
 P_left, P_right, P_left_perp, P_right_perp = make_error_projectors(A_star, k)
 
@@ -188,6 +192,9 @@ def train_model(
     P_right_perp,
     model_null_proj=None,
     model_null_label="model_null_norm",
+    top_sv_every_epochs=None,
+    top_sv_k=10,
+    top_sv_method="exact",
     seed=123,
 ):
     if optimizer_name.lower() == "sgd":
@@ -277,6 +284,20 @@ def train_model(
                     f"lr={scheduler.get_last_lr()[0]:.3e}"
                 )
 
+            if top_sv_every_epochs is not None and (
+                epoch == 1 or epoch % top_sv_every_epochs == 0 or epoch == epochs
+            ):
+                with torch.no_grad():
+                    if top_sv_method == "exact":
+                        sv_top = torch.sort(torch.linalg.svdvals(A_cur), descending=True).values[:top_sv_k]
+                    elif top_sv_method == "lowrank":
+                        q = min(max(top_sv_k + 5, top_sv_k), min(A_cur.shape))
+                        _, s_lr, _ = torch.svd_lowrank(A_cur, q=q, niter=2)
+                        sv_top = torch.sort(s_lr, descending=True).values[:top_sv_k]
+                    else:
+                        raise ValueError(f"Unknown top_sv_method={top_sv_method}")
+                print(f"{name:7s} {epoch:5d} | top-{top_sv_k} sv ({top_sv_method}) = {sv_top.cpu().numpy()}")
+
     with torch.no_grad():
         return summarize_A(
             get_A_fn(model),
@@ -298,25 +319,47 @@ print(
     f"epochs={epochs}, batch_size={batch_size}"
 )
 
-with torch.no_grad():
-    print("\n====================")
-    print("Experiment 1: low-rank A*, full-rank X")
-    print("====================")
-    s_star = torch.sort(torch.linalg.svdvals(A_star), descending=True).values
-    print("A* top-10 singular values:", s_star[:10].cpu().numpy())
-deep_results = {}
-for r in deep_widths:
-    deep_model = DeepLinear(d=d, m=m, r=r, init_scale=0.01, device=device)
-    deep_results[r] = train_model(
-        name=f"Deep(r={r})",
-        model=deep_model,
-        get_A_fn=lambda model: model.end_to_end(),
+if run_experiment_1:
+    with torch.no_grad():
+        print("\n====================")
+        print("Experiment 1: low-rank A*, full-rank X")
+        print("====================")
+        s_star = torch.sort(torch.linalg.svdvals(A_star), descending=True).values
+        print("A* top-10 singular values:", s_star[:10].cpu().numpy())
+    deep_results = {}
+    for r in deep_widths:
+        deep_model = DeepLinear(d=d, m=m, r=r, init_scale=0.01, device=device)
+        deep_results[r] = train_model(
+            name=f"Deep(r={r})",
+            model=deep_model,
+            get_A_fn=lambda model: model.end_to_end(),
+            X=X,
+            Y=Y,
+            A_star=A_star,
+            lr=deep_lr,
+            optimizer_name=deep_optimizer_name,
+            lr_decay_gamma=deep_lr_decay_gamma,
+            epochs=epochs,
+            batch_size=batch_size,
+            svd_every_epochs=svd_every_epochs,
+            rank_thresh=rank_thresh,
+            device=device,
+            P_left=P_left,
+            P_right=P_right,
+            P_left_perp=P_left_perp,
+            P_right_perp=P_right_perp,
+        )
+
+    ms = train_model(
+        name="Shallow",
+        model=shallow_model,
+        get_A_fn=lambda model: model.weight,
         X=X,
         Y=Y,
         A_star=A_star,
-        lr=deep_lr,
-        optimizer_name=deep_optimizer_name,
-        lr_decay_gamma=deep_lr_decay_gamma,
+        lr=shallow_lr,
+        optimizer_name=shallow_optimizer_name,
+        lr_decay_gamma=shallow_lr_decay_gamma,
         epochs=epochs,
         batch_size=batch_size,
         svd_every_epochs=svd_every_epochs,
@@ -328,46 +371,26 @@ for r in deep_widths:
         P_right_perp=P_right_perp,
     )
 
-ms = train_model(
-    name="Shallow",
-    model=shallow_model,
-    get_A_fn=lambda model: model.weight,
-    X=X,
-    Y=Y,
-    A_star=A_star,
-    lr=shallow_lr,
-    optimizer_name=shallow_optimizer_name,
-    lr_decay_gamma=shallow_lr_decay_gamma,
-    epochs=epochs,
-    batch_size=batch_size,
-    svd_every_epochs=svd_every_epochs,
-    rank_thresh=rank_thresh,
-    device=device,
-    P_left=P_left,
-    P_right=P_right,
-    P_left_perp=P_left_perp,
-    P_right_perp=P_right_perp,
-)
-
-# Final spectra
-print("\n[Final top-10 singular values]")
-print("A*     :", torch.sort(torch.linalg.svdvals(A_star), descending=True).values[:10].cpu().numpy())
-for r in deep_widths:
-    print(f"Deep(r={r}):", deep_results[r]["top_sv"].numpy())
-print("Shallow:", ms["top_sv"].numpy())
-print("\n[Final error decomposition]")
-for r in deep_widths:
-    mr = deep_results[r]
+    print("\n[Final top-10 singular values]")
+    print("A*     :", torch.sort(torch.linalg.svdvals(A_star), descending=True).values[:10].cpu().numpy())
+    for r in deep_widths:
+        print(f"Deep(r={r}):", deep_results[r]["top_sv"].numpy())
+    print("Shallow:", ms["top_sv"].numpy())
+    print("\n[Final error decomposition]")
+    for r in deep_widths:
+        mr = deep_results[r]
+        print(
+            "Deep(r={}) support={:.3e} outside={:.3e} null={:.3e} mixed={:.3e}".format(
+                r, mr["err_support"], mr["err_outside"], mr["err_null"], mr["err_mixed"]
+            )
+        )
     print(
-        "Deep(r={}) support={:.3e} outside={:.3e} null={:.3e} mixed={:.3e}".format(
-            r, mr["err_support"], mr["err_outside"], mr["err_null"], mr["err_mixed"]
+        "Shallow support={:.3e} outside={:.3e} null={:.3e} mixed={:.3e}".format(
+            ms["err_support"], ms["err_outside"], ms["err_null"], ms["err_mixed"]
         )
     )
-print(
-    "Shallow support={:.3e} outside={:.3e} null={:.3e} mixed={:.3e}".format(
-        ms["err_support"], ms["err_outside"], ms["err_null"], ms["err_mixed"]
-    )
-)
+else:
+    print("\nExperiment 1 is disabled for efficiency (run_experiment_1=False).")
 
 # ----------------------------
 # Experiment 2
@@ -418,7 +441,8 @@ with torch.no_grad():
     print(
         f"lowX schedule: epochs={epochs_lowX}, deep_lr={deep_lr_lowX}, "
         f"deep_decay_gamma={deep_lr_decay_gamma_lowX}, shallow_lr={shallow_lr_lowX}, "
-        f"shallow_decay_gamma={shallow_lr_decay_gamma_lowX}, svd_every={svd_every_epochs_lowX}"
+        f"shallow_decay_gamma={shallow_lr_decay_gamma_lowX}, svd_every={svd_every_epochs_lowX}, "
+        f"top_sv_every={top_sv_every_epochs_lowX}, top_sv_method={top_sv_method_lowX}"
     )
     print("A* (full) top-10 singular values:", s_full[:10].cpu().numpy())
     print(
@@ -453,6 +477,9 @@ for r in deep_widths:
         P_right_perp=P_right2_perp,
         model_null_proj=Q_x,
         model_null_label="model_nullX_norm",
+        top_sv_every_epochs=top_sv_every_epochs_lowX,
+        top_sv_k=top_sv_k,
+        top_sv_method=top_sv_method_lowX,
     )
 
 shallow_model_lowX = nn.Linear(d, m, bias=False, device=device)
@@ -480,6 +507,9 @@ ms_lowX = train_model(
     P_right_perp=P_right2_perp,
     model_null_proj=Q_x,
     model_null_label="model_nullX_norm",
+    top_sv_every_epochs=top_sv_every_epochs_lowX,
+    top_sv_k=top_sv_k,
+    top_sv_method=top_sv_method_lowX,
 )
 
 print("\n[Experiment 2 final spectra]")
