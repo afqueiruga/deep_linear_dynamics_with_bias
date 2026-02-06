@@ -242,3 +242,28 @@
   - `model_nullX_norm = ||A_hat Q_x||_F`
 - Enabled this for Experiment 2 (both deep widths and shallow baseline).
 - This metric tracks exactly the quantity tied to the nullspace-bias hypothesis and is now logged every reporting epoch, alongside loss and error decomposition terms.
+
+### Probe: longer run for slow implicit-regularization hypothesis
+- Request: test whether deep nullspace mass decays with more epochs and less aggressive decay.
+
+#### Trial H3 (Experiment 2 only)
+- Changed low-`X` schedule:
+  - `epochs_lowX=2000`
+  - `deep_lr_lowX=1e-2`
+  - `deep_lr_decay_gamma_lowX=0.999` (slower decay)
+  - `shallow_lr_lowX=1e-2`, `shallow_lr_decay_gamma_lowX=1.0`
+  - `svd_every_epochs_lowX=100`
+- Kept Experiment 1 schedule unchanged.
+
+#### Key checkpoints: `LowX-Deep(r=500)`
+- epoch 400: `model_nullX_norm=2.019e+00`, `loss=6.411e-15`, `lr=6.702e-03`
+- epoch 1000: `model_nullX_norm=2.019e+00`, `loss=6.355e-15`, `lr=3.677e-03`
+- epoch 1500: `model_nullX_norm=2.019e+00`, `loss=6.329e-15`, `lr=2.230e-03`
+- epoch 2000: `model_nullX_norm=2.019e+00`, `loss=6.315e-15`, `lr=1.352e-03`
+
+#### Comparison at epoch 2000
+- `LowX-Deep(r=500)`: `model_nullX_norm=2.019e+00`, `support_fit_err=1.752e-06`
+- `LowX-Shallow`: `model_nullX_norm=4.884e+00`, `support_fit_err=5.267e-05`
+
+#### Observation
+- Under this longer/slower schedule, deep still has smaller nullspace mass than shallow, but `model_nullX_norm` for `Deep(r=500)` appears plateaued rather than continuing to decay toward zero.

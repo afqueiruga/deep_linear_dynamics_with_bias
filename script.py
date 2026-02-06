@@ -157,6 +157,13 @@ epochs = 400
 batch_size = n
 svd_every_epochs = 20     # compute SVD metrics only every few epochs
 rank_thresh = 1e-2
+# Experiment-2-specific schedule to probe slow implicit regularization.
+epochs_lowX = 2000
+svd_every_epochs_lowX = 100
+deep_lr_lowX = 1e-2
+deep_lr_decay_gamma_lowX = 0.999
+shallow_lr_lowX = 1e-2
+shallow_lr_decay_gamma_lowX = 1.0
 # Fixed projectors from A* used to track how training error moves across subspaces.
 P_left, P_right, P_left_perp, P_right_perp = make_error_projectors(A_star, k)
 
@@ -408,6 +415,11 @@ with torch.no_grad():
     print("Experiment 2: full-rank A*, low-rank X")
     print("====================")
     print(f"X rank proxy kx={kx}, empirical rank from SVD={rank_x_emp}")
+    print(
+        f"lowX schedule: epochs={epochs_lowX}, deep_lr={deep_lr_lowX}, "
+        f"deep_decay_gamma={deep_lr_decay_gamma_lowX}, shallow_lr={shallow_lr_lowX}, "
+        f"shallow_decay_gamma={shallow_lr_decay_gamma_lowX}, svd_every={svd_every_epochs_lowX}"
+    )
     print("A* (full) top-10 singular values:", s_full[:10].cpu().numpy())
     print(
         "||A*_learnable||_F={:.3e}, ||A*_unlearnable||_F={:.3e}".format(
@@ -427,12 +439,12 @@ for r in deep_widths:
         X=X_low,
         Y=Y_low,
         A_star=A_star_full,
-        lr=deep_lr,
+        lr=deep_lr_lowX,
         optimizer_name=deep_optimizer_name,
-        lr_decay_gamma=deep_lr_decay_gamma,
-        epochs=epochs,
+        lr_decay_gamma=deep_lr_decay_gamma_lowX,
+        epochs=epochs_lowX,
         batch_size=batch_size,
-        svd_every_epochs=svd_every_epochs,
+        svd_every_epochs=svd_every_epochs_lowX,
         rank_thresh=rank_thresh,
         device=device,
         P_left=P_left2,
@@ -454,12 +466,12 @@ ms_lowX = train_model(
     X=X_low,
     Y=Y_low,
     A_star=A_star_full,
-    lr=shallow_lr,
+    lr=shallow_lr_lowX,
     optimizer_name=shallow_optimizer_name,
-    lr_decay_gamma=shallow_lr_decay_gamma,
-    epochs=epochs,
+    lr_decay_gamma=shallow_lr_decay_gamma_lowX,
+    epochs=epochs_lowX,
     batch_size=batch_size,
-    svd_every_epochs=svd_every_epochs,
+    svd_every_epochs=svd_every_epochs_lowX,
     rank_thresh=rank_thresh,
     device=device,
     P_left=P_left2,
