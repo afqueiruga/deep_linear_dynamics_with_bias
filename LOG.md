@@ -68,3 +68,29 @@
 - Final decomposition (post-refactor run):
   - Deep: `support=5.607e+00`, `null=2.437e-02`, `mixed=1.557e-01`
   - Shallow: `support=3.326e+00`, `null=2.055e-01`, `mixed=1.639e-01`
+
+### Hyperparameter tuning to reduce loss
+
+#### Trial H0 (previous baseline, from earlier run)
+- Deep: SGD, `lr=0.5`, `epochs=50`, `batch_size=512`.
+- Shallow: SGD, `lr=0.5`, `epochs=50`, `batch_size=512`.
+- Outcome:
+  - Deep final loss (epoch 50): about `1.293e-02`.
+  - Shallow final loss (epoch 50): about `4.533e-03`.
+- Assessment: losses not low enough.
+
+#### Trial H1 (new settings)
+- Deep: Adam, `lr=2e-2`, `epochs=400`, `batch_size=n` (full batch).
+- Shallow: Adam, `lr=1e-2`, `epochs=400`, `batch_size=n` (full batch).
+- Script changes:
+  - Added `optimizer_name` support in `train_model(...)` with `sgd` and `adam`.
+  - Added separate optimizer/lr knobs for deep and shallow.
+  - Increased epochs and switched to full-batch updates.
+- Command: `python3.11 script.py`
+- Outcome:
+  - Deep final loss (epoch 400): `1.820e-09`.
+  - Shallow final loss (epoch 400): `7.792e-16`.
+- Assessment: very low losses achieved for both models.
+
+#### Selected configuration
+- Keep Trial H1 as default in `script.py`.

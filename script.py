@@ -135,12 +135,15 @@ shallow_model = nn.Linear(d, m, bias=False, device=device)
 with torch.no_grad():
     nn.init.normal_(shallow_model.weight, mean=0.0, std=0.01)
 
-lr = 0.5
-
 # Logging / runtime knobs
-epochs = 50
-batch_size = 512
-svd_every_epochs = 5     # compute SVD metrics only every few epochs
+# Trial hyperparameters (adjusted for stronger convergence)
+deep_optimizer_name = "adam"
+shallow_optimizer_name = "adam"
+deep_lr = 2e-2
+shallow_lr = 1e-2
+epochs = 400
+batch_size = n
+svd_every_epochs = 20     # compute SVD metrics only every few epochs
 rank_thresh = 1e-2
 # Fixed projectors from A* used to track how training error moves across subspaces.
 P_left, P_right, P_left_perp, P_right_perp = make_error_projectors(A_star, k)
@@ -153,6 +156,7 @@ def train_model(
     Y,
     A_star,
     lr,
+    optimizer_name,
     epochs,
     batch_size,
     svd_every_epochs,
@@ -164,7 +168,12 @@ def train_model(
     P_right_perp,
     seed=123,
 ):
-    opt = optim.SGD(model.parameters(), lr=lr)
+    if optimizer_name.lower() == "sgd":
+        opt = optim.SGD(model.parameters(), lr=lr)
+    elif optimizer_name.lower() == "adam":
+        opt = optim.Adam(model.parameters(), lr=lr)
+    else:
+        raise ValueError(f"Unknown optimizer_name={optimizer_name}")
     loss_fn = nn.MSELoss()
     g = torch.Generator(device=device)
     g.manual_seed(seed)
@@ -232,7 +241,12 @@ def train_model(
             P_right_perp=P_right_perp,
         )
 
-print(f"device={device}, n={n}, d={d}, m={m}, true rank k={k}, hidden r={r}, lr={lr}")
+print(
+    f"device={device}, n={n}, d={d}, m={m}, true rank k={k}, hidden r={r}, "
+    f"deep_opt={deep_optimizer_name}, deep_lr={deep_lr}, "
+    f"shallow_opt={shallow_optimizer_name}, shallow_lr={shallow_lr}, "
+    f"epochs={epochs}, batch_size={batch_size}"
+)
 
 with torch.no_grad():
     s_star = torch.sort(torch.linalg.svdvals(A_star), descending=True).values
@@ -244,7 +258,8 @@ md = train_model(
     X=X,
     Y=Y,
     A_star=A_star,
-    lr=lr,
+    lr=deep_lr,
+    optimizer_name=deep_optimizer_name,
     epochs=epochs,
     batch_size=batch_size,
     svd_every_epochs=svd_every_epochs,
@@ -262,7 +277,8 @@ ms = train_model(
     X=X,
     Y=Y,
     A_star=A_star,
-    lr=lr,
+    lr=shallow_lr,
+    optimizer_name=shallow_optimizer_name,
     epochs=epochs,
     batch_size=batch_size,
     svd_every_epochs=svd_every_epochs,
