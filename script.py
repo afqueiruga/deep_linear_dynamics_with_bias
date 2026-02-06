@@ -26,6 +26,10 @@ def add_label_noise(Y, noise_std, generator=None):
     noise = noise_std * torch.randn(Y.shape, device=Y.device, dtype=Y.dtype, generator=generator)
     return Y + noise
 
+def format_top_svs(sv, k=10):
+    vals = sv[:k].tolist()
+    return "[" + ", ".join(f"{v:.3e}" for v in vals) + "]"
+
 def effective_rank(s, eps=1e-12):
     p = s / (s.sum() + eps)
     H = -(p * (p + eps).log()).sum()
@@ -230,21 +234,35 @@ def train_model(
         )
         if model_null_proj is not None:
             m0[model_null_label] = (A0 @ model_null_proj).norm().item()
-    print(
-        f"\n[{name} init] rel_err={m0['rel_err']:.3f} nuc={m0['nuc']:.3f} "
-        f"effR={m0['eff_rank']:.2f} numR={m0['num_rank']} "
-        f"support={m0['err_support']:.3e} outside={m0['err_outside']:.3e} null={m0['err_null']:.3e}"
+        if top_sv_method == "exact":
+            sv0 = torch.sort(torch.linalg.svdvals(A0), descending=True).values[:top_sv_k]
+        elif top_sv_method == "lowrank":
+            q = min(max(top_sv_k + 5, top_sv_k), min(A0.shape))
+            _, s_lr0, _ = torch.svd_lowrank(A0, q=q, niter=2)
+            sv0 = torch.sort(s_lr0, descending=True).values[:top_sv_k]
+        else:
+            raise ValueError(f"Unknown top_sv_method={top_sv_method}")
+
+    header = (
+        "model          | epoch | loss      | lr        | rel_err   | fro       | nuc       | spec      | "
+        "eff_rank | num_rank | err_support | err_outside | err_null  | err_mixed | "
+        "supp_frac | out_frac | null_frac | mixed_frac"
     )
-    # support_frac = ||P_left E P_right||_F / ||E||_F
-    # outside_frac = ||E - P_left E P_right||_F / ||E||_F
-    # null_frac    = ||P_left_perp E P_right_perp||_F / ||E||_F
-    if model_null_proj is None:
-        print(f"{name} epoch | loss | rel_err | support_err | outside_err | null_err | support_frac | outside_frac | null_frac | lr")
-    else:
-        print(
-            f"{name} epoch | loss | rel_err | support_err | outside_err | null_err | "
-            f"{model_null_label} | support_frac | outside_frac | null_frac | lr"
-        )
+    if model_null_proj is not None:
+        header += f" | {model_null_label}"
+    header += " | top_sv"
+    print(f"\n[{name}]")
+    print(header)
+    init_row = (
+        f"{name:14s} | {0:5d} | {'-':>9s} | {lr:9.3e} | {m0['rel_err']:9.3e} | {m0['fro']:9.3e} | "
+        f"{m0['nuc']:9.3e} | {m0['spec']:9.3e} | {m0['eff_rank']:8.3f} | {m0['num_rank']:8d} | "
+        f"{m0['err_support']:11.3e} | {m0['err_outside']:11.3e} | {m0['err_null']:9.3e} | {m0['err_mixed']:9.3e} | "
+        f"{m0['err_support_frac']:9.3f} | {m0['err_outside_frac']:8.3f} | {m0['err_null_frac']:9.3f} | {m0['err_mixed_frac']:10.3f}"
+    )
+    if model_null_proj is not None:
+        init_row += f" | {m0[model_null_label]:11.3e}"
+    init_row += f" | {format_top_svs(sv0, k=top_sv_k)}"
+    print(init_row)
 
     for epoch in range(1, epochs + 1):
         loss_accum = 0.0
@@ -277,26 +295,9 @@ def train_model(
                 )
                 if model_null_proj is not None:
                     m[model_null_label] = (A_cur @ model_null_proj).norm().item()
-            if model_null_proj is None:
-                print(
-                    f"{name:7s} {epoch:5d} | {avg_loss:9.3e} | {m['rel_err']:.3e} | "
-                    f"{m['err_support']:.3e} | {m['err_outside']:.3e} | {m['err_null']:.3e} | "
-                    f"{m['err_support_frac']:.2f} | {m['err_outside_frac']:.2f} | {m['err_null_frac']:.2f} | "
-                    f"lr={scheduler.get_last_lr()[0]:.3e}"
-                )
-            else:
-                print(
-                    f"{name:7s} {epoch:5d} | {avg_loss:9.3e} | {m['rel_err']:.3e} | "
-                    f"{m['err_support']:.3e} | {m['err_outside']:.3e} | {m['err_null']:.3e} | "
-                    f"{m[model_null_label]:.3e} | "
-                    f"{m['err_support_frac']:.2f} | {m['err_outside_frac']:.2f} | {m['err_null_frac']:.2f} | "
-                    f"lr={scheduler.get_last_lr()[0]:.3e}"
-                )
-
-            if top_sv_every_epochs is not None and (
-                epoch == 1 or epoch % top_sv_every_epochs == 0 or epoch == epochs
-            ):
-                with torch.no_grad():
+                print_top_sv = top_sv_every_epochs is None or epoch % top_sv_every_epochs == 0 or epoch == 1 or epoch == epochs
+                sv_str = "-"
+                if print_top_sv:
                     if top_sv_method == "exact":
                         sv_top = torch.sort(torch.linalg.svdvals(A_cur), descending=True).values[:top_sv_k]
                     elif top_sv_method == "lowrank":
@@ -305,7 +306,17 @@ def train_model(
                         sv_top = torch.sort(s_lr, descending=True).values[:top_sv_k]
                     else:
                         raise ValueError(f"Unknown top_sv_method={top_sv_method}")
-                print(f"{name:7s} {epoch:5d} | top-{top_sv_k} sv ({top_sv_method}) = {sv_top.cpu().numpy()}")
+                    sv_str = format_top_svs(sv_top, k=top_sv_k)
+            row = (
+                f"{name:14s} | {epoch:5d} | {avg_loss:9.3e} | {scheduler.get_last_lr()[0]:9.3e} | {m['rel_err']:9.3e} | {m['fro']:9.3e} | "
+                f"{m['nuc']:9.3e} | {m['spec']:9.3e} | {m['eff_rank']:8.3f} | {m['num_rank']:8d} | "
+                f"{m['err_support']:11.3e} | {m['err_outside']:11.3e} | {m['err_null']:9.3e} | {m['err_mixed']:9.3e} | "
+                f"{m['err_support_frac']:9.3f} | {m['err_outside_frac']:8.3f} | {m['err_null_frac']:9.3f} | {m['err_mixed_frac']:10.3f}"
+            )
+            if model_null_proj is not None:
+                row += f" | {m[model_null_label]:11.3e}"
+            row += f" | {sv_str}"
+            print(row)
 
     with torch.no_grad():
         return summarize_A(
@@ -338,7 +349,7 @@ if run_experiment_1:
         print("====================")
         print(f"label_noise_std_exp1={label_noise_std_exp1}")
         s_star = torch.sort(torch.linalg.svdvals(A_star), descending=True).values
-        print("A* top-10 singular values:", s_star[:10].cpu().numpy())
+        print("A* top-10 singular values:", format_top_svs(s_star, k=10))
     deep_results = {}
     for r in deep_widths:
         deep_model = DeepLinear(d=d, m=m, r=r, init_scale=0.01, device=device)
@@ -385,10 +396,10 @@ if run_experiment_1:
     )
 
     print("\n[Final top-10 singular values]")
-    print("A*     :", torch.sort(torch.linalg.svdvals(A_star), descending=True).values[:10].cpu().numpy())
+    print("A*     :", format_top_svs(torch.sort(torch.linalg.svdvals(A_star), descending=True).values, k=10))
     for r in deep_widths:
-        print(f"Deep(r={r}):", deep_results[r]["top_sv"].numpy())
-    print("Shallow:", ms["top_sv"].numpy())
+        print(f"Deep(r={r}):", format_top_svs(deep_results[r]["top_sv"], k=10))
+    print("Shallow:", format_top_svs(ms["top_sv"], k=10))
     print("\n[Final error decomposition]")
     for r in deep_widths:
         mr = deep_results[r]
@@ -461,7 +472,7 @@ with torch.no_grad():
         f"top_sv_every={top_sv_every_epochs_lowX}, top_sv_method={top_sv_method_lowX}"
     )
     print(f"label_noise_std_lowX={label_noise_std_lowX}")
-    print("A* (full) top-10 singular values:", s_full[:10].cpu().numpy())
+    print("A* (full) top-10 singular values:", format_top_svs(s_full, k=10))
     print(
         "||A*_learnable||_F={:.3e}, ||A*_unlearnable||_F={:.3e}".format(
             A_star_learnable.norm().item(), A_star_unlearnable.norm().item()
@@ -530,10 +541,10 @@ ms_lowX = train_model(
 )
 
 print("\n[Experiment 2 final spectra]")
-print("A* (full):", torch.sort(torch.linalg.svdvals(A_star_full), descending=True).values[:10].cpu().numpy())
+print("A* (full):", format_top_svs(torch.sort(torch.linalg.svdvals(A_star_full), descending=True).values, k=10))
 for r in deep_widths:
-    print(f"LowX-Deep(r={r}):", deep_results_lowX[r]["top_sv"].numpy())
-print("LowX-Shallow:", ms_lowX["top_sv"].numpy())
+    print(f"LowX-Deep(r={r}):", format_top_svs(deep_results_lowX[r]["top_sv"], k=10))
+print("LowX-Shallow:", format_top_svs(ms_lowX["top_sv"], k=10))
 
 print("\n[Experiment 2 identifiable vs null(X) decomposition]")
 for r in deep_widths:

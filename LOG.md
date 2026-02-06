@@ -315,3 +315,21 @@
 - Learnable support fit error for both deep and shallow is near `2.47e-3`.
 - Deep still keeps a smaller learned nullspace component than shallow (`2.17` vs `5.07`).
 - For `Deep(r=500)`, `model_nullX_norm` remains flat over long training under this schedule (no visible further decay).
+
+### Update: print all `summarize_A` stats + compact formatting
+- Training logs now print all scalar stats returned by `summarize_A` at each reporting epoch:
+  - `rel_err`, `fro`, `nuc`, `spec`, `eff_rank`, `num_rank`
+  - `err_support`, `err_outside`, `err_null`, `err_mixed`
+  - `err_support_frac`, `err_outside_frac`, `err_null_frac`, `err_mixed_frac`
+  - plus `model_nullX_norm` when enabled.
+- Added compact singular-value formatter to avoid wrapped NumPy array output:
+  - singular values now print as one-line comma-separated scientific notation.
+
+### Update: table-style metrics rows with singular values inline
+- Replaced key=value epoch logging with table-style rows.
+- Each reporting epoch now emits exactly one row containing:
+  - all scalar `summarize_A` metrics,
+  - optional `model_nullX_norm`,
+  - and `top_sv` as the final column.
+- Removed separate extra singular-value lines per epoch; singular values are now appended in-row.
+- Added an epoch-0 initialization row for each model in the same table format.
