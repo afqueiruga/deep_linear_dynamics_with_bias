@@ -171,8 +171,8 @@ run_experiment_1 = False  # disabled for efficiency; set True to re-enable
 # Label-noise options (set to >0 to enable additive Gaussian noise on Y).
 label_noise_std_exp1 = 0.0
 # Experiment-2-specific schedule to probe slow implicit regularization.
-epochs_lowX = 2000
-svd_every_epochs_lowX = 100
+epochs_lowX = 200
+svd_every_epochs_lowX = 5
 deep_lr_lowX = 1e-2
 deep_lr_decay_gamma_lowX = 0.999
 shallow_lr_lowX = 1e-2
@@ -180,7 +180,7 @@ shallow_lr_decay_gamma_lowX = 1.0
 top_sv_every_epochs_lowX = svd_every_epochs_lowX
 top_sv_k = 10
 top_sv_method_lowX = "lowrank"  # "exact" or "lowrank"
-label_noise_std_lowX = 1e-2
+label_noise_values_lowX = [0.0, 1e-2]
 # Fixed projectors from A* used to track how training error moves across subspaces.
 P_left, P_right, P_left_perp, P_right_perp = make_error_projectors(A_star, k)
 
@@ -423,10 +423,6 @@ else:
 kx = 5
 A_star_full = make_low_rank_matrix(m, d, k=min(m, d), device=device)  # full-rank target map
 X_low, _ = make_low_rank_inputs(n=n, d=d, kx=kx, device=device)
-Y_low = X_low @ A_star_full.T
-g_noise_lowX = torch.Generator(device=device)
-g_noise_lowX.manual_seed(2027)
-Y_low = add_label_noise(Y_low, label_noise_std_lowX, generator=g_noise_lowX)
 
 I_m = torch.eye(m, device=device)
 I_d = torch.eye(d, device=device)
@@ -471,7 +467,7 @@ with torch.no_grad():
         f"shallow_decay_gamma={shallow_lr_decay_gamma_lowX}, svd_every={svd_every_epochs_lowX}, "
         f"top_sv_every={top_sv_every_epochs_lowX}, top_sv_method={top_sv_method_lowX}"
     )
-    print(f"label_noise_std_lowX={label_noise_std_lowX}")
+    print(f"label_noise_values_lowX={label_noise_values_lowX}")
     print("A* (full) top-10 singular values:", format_top_svs(s_full, k=10))
     print(
         "||A*_learnable||_F={:.3e}, ||A*_unlearnable||_F={:.3e}".format(
@@ -479,21 +475,61 @@ with torch.no_grad():
         )
     )
 
-deep_results_lowX = {}
-deep_models_lowX = {}
-for r in deep_widths:
-    deep_model = DeepLinear(d=d, m=m, r=r, init_scale=0.01, device=device)
-    deep_models_lowX[r] = deep_model
-    deep_results_lowX[r] = train_model(
-        name=f"LowX-Deep(r={r})",
-        model=deep_model,
-        get_A_fn=lambda model: model.end_to_end(),
+for noise_idx, label_noise_std_lowX in enumerate(label_noise_values_lowX):
+    Y_low = X_low @ A_star_full.T
+    g_noise_lowX = torch.Generator(device=device)
+    g_noise_lowX.manual_seed(2027 + noise_idx)
+    Y_low = add_label_noise(Y_low, label_noise_std_lowX, generator=g_noise_lowX)
+
+    print("\n--------------------")
+    print(f"Experiment 2 run: label_noise_std_lowX={label_noise_std_lowX}")
+    print("--------------------")
+
+    deep_results_lowX = {}
+    deep_models_lowX = {}
+    for r in deep_widths:
+        deep_model = DeepLinear(d=d, m=m, r=r, init_scale=0.01, device=device)
+        deep_models_lowX[r] = deep_model
+        deep_results_lowX[r] = train_model(
+            name=f"LowX-Deep(r={r})",
+            model=deep_model,
+            get_A_fn=lambda model: model.end_to_end(),
+            X=X_low,
+            Y=Y_low,
+            A_star=A_star_full,
+            lr=deep_lr_lowX,
+            optimizer_name=deep_optimizer_name,
+            lr_decay_gamma=deep_lr_decay_gamma_lowX,
+            epochs=epochs_lowX,
+            batch_size=batch_size,
+            svd_every_epochs=svd_every_epochs_lowX,
+            rank_thresh=rank_thresh,
+            device=device,
+            P_left=P_left2,
+            P_right=P_right2,
+            P_left_perp=P_left2_perp,
+            P_right_perp=P_right2_perp,
+            model_null_proj=Q_x,
+            model_null_label="model_nullX_norm",
+            top_sv_every_epochs=top_sv_every_epochs_lowX,
+            top_sv_k=top_sv_k,
+            top_sv_method=top_sv_method_lowX,
+        )
+
+    shallow_model_lowX = nn.Linear(d, m, bias=False, device=device)
+    with torch.no_grad():
+        nn.init.normal_(shallow_model_lowX.weight, mean=0.0, std=0.01)
+
+    ms_lowX = train_model(
+        name="LowX-Shallow",
+        model=shallow_model_lowX,
+        get_A_fn=lambda model: model.weight,
         X=X_low,
         Y=Y_low,
         A_star=A_star_full,
-        lr=deep_lr_lowX,
-        optimizer_name=deep_optimizer_name,
-        lr_decay_gamma=deep_lr_decay_gamma_lowX,
+        lr=shallow_lr_lowX,
+        optimizer_name=shallow_optimizer_name,
+        lr_decay_gamma=shallow_lr_decay_gamma_lowX,
         epochs=epochs_lowX,
         batch_size=batch_size,
         svd_every_epochs=svd_every_epochs_lowX,
@@ -510,62 +546,32 @@ for r in deep_widths:
         top_sv_method=top_sv_method_lowX,
     )
 
-shallow_model_lowX = nn.Linear(d, m, bias=False, device=device)
-with torch.no_grad():
-    nn.init.normal_(shallow_model_lowX.weight, mean=0.0, std=0.01)
+    print(f"\n[Experiment 2 final spectra | noise={label_noise_std_lowX}]")
+    print("A* (full):", format_top_svs(torch.sort(torch.linalg.svdvals(A_star_full), descending=True).values, k=10))
+    for r in deep_widths:
+        print(f"LowX-Deep(r={r}):", format_top_svs(deep_results_lowX[r]["top_sv"], k=10))
+    print("LowX-Shallow:", format_top_svs(ms_lowX["top_sv"], k=10))
 
-ms_lowX = train_model(
-    name="LowX-Shallow",
-    model=shallow_model_lowX,
-    get_A_fn=lambda model: model.weight,
-    X=X_low,
-    Y=Y_low,
-    A_star=A_star_full,
-    lr=shallow_lr_lowX,
-    optimizer_name=shallow_optimizer_name,
-    lr_decay_gamma=shallow_lr_decay_gamma_lowX,
-    epochs=epochs_lowX,
-    batch_size=batch_size,
-    svd_every_epochs=svd_every_epochs_lowX,
-    rank_thresh=rank_thresh,
-    device=device,
-    P_left=P_left2,
-    P_right=P_right2,
-    P_left_perp=P_left2_perp,
-    P_right_perp=P_right2_perp,
-    model_null_proj=Q_x,
-    model_null_label="model_nullX_norm",
-    top_sv_every_epochs=top_sv_every_epochs_lowX,
-    top_sv_k=top_sv_k,
-    top_sv_method=top_sv_method_lowX,
-)
+    print(f"\n[Experiment 2 identifiable vs null(X) decomposition | noise={label_noise_std_lowX}]")
+    for r in deep_widths:
+        A_hat = deep_models_lowX[r].end_to_end()
+        support_fit_err = ((A_hat - A_star_full) @ P_x).norm().item()
+        learnable_target_err = (A_hat @ P_x - A_star_learnable).norm().item()
+        model_nullX_norm = (A_hat @ Q_x).norm().item()
+        target_nullX_norm = A_star_unlearnable.norm().item()
+        print(
+            "LowX-Deep(r={}) support_fit_err={:.3e} learnable_target_err={:.3e} model_nullX_norm={:.3e} target_nullX_norm={:.3e}".format(
+                r, support_fit_err, learnable_target_err, model_nullX_norm, target_nullX_norm
+            )
+        )
 
-print("\n[Experiment 2 final spectra]")
-print("A* (full):", format_top_svs(torch.sort(torch.linalg.svdvals(A_star_full), descending=True).values, k=10))
-for r in deep_widths:
-    print(f"LowX-Deep(r={r}):", format_top_svs(deep_results_lowX[r]["top_sv"], k=10))
-print("LowX-Shallow:", format_top_svs(ms_lowX["top_sv"], k=10))
-
-print("\n[Experiment 2 identifiable vs null(X) decomposition]")
-for r in deep_widths:
-    A_hat = deep_models_lowX[r].end_to_end()
-    support_fit_err = ((A_hat - A_star_full) @ P_x).norm().item()
-    learnable_target_err = (A_hat @ P_x - A_star_learnable).norm().item()
-    model_nullX_norm = (A_hat @ Q_x).norm().item()
-    target_nullX_norm = A_star_unlearnable.norm().item()
+    A_hat_shallow_lowX = shallow_model_lowX.weight
+    support_fit_err_shallow = ((A_hat_shallow_lowX - A_star_full) @ P_x).norm().item()
+    learnable_target_err_shallow = (A_hat_shallow_lowX @ P_x - A_star_learnable).norm().item()
+    model_nullX_norm_shallow = (A_hat_shallow_lowX @ Q_x).norm().item()
+    target_nullX_norm_shallow = A_star_unlearnable.norm().item()
     print(
-        "LowX-Deep(r={}) support_fit_err={:.3e} learnable_target_err={:.3e} model_nullX_norm={:.3e} target_nullX_norm={:.3e}".format(
-            r, support_fit_err, learnable_target_err, model_nullX_norm, target_nullX_norm
+        "LowX-Shallow support_fit_err={:.3e} learnable_target_err={:.3e} model_nullX_norm={:.3e} target_nullX_norm={:.3e}".format(
+            support_fit_err_shallow, learnable_target_err_shallow, model_nullX_norm_shallow, target_nullX_norm_shallow
         )
     )
-
-A_hat_shallow_lowX = shallow_model_lowX.weight
-support_fit_err_shallow = ((A_hat_shallow_lowX - A_star_full) @ P_x).norm().item()
-learnable_target_err_shallow = (A_hat_shallow_lowX @ P_x - A_star_learnable).norm().item()
-model_nullX_norm_shallow = (A_hat_shallow_lowX @ Q_x).norm().item()
-target_nullX_norm_shallow = A_star_unlearnable.norm().item()
-print(
-    "LowX-Shallow support_fit_err={:.3e} learnable_target_err={:.3e} model_nullX_norm={:.3e} target_nullX_norm={:.3e}".format(
-        support_fit_err_shallow, learnable_target_err_shallow, model_nullX_norm_shallow, target_nullX_norm_shallow
-    )
-)

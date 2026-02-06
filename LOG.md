@@ -333,3 +333,29 @@
   - and `top_sv` as the final column.
 - Removed separate extra singular-value lines per epoch; singular values are now appended in-row.
 - Added an epoch-0 initialization row for each model in the same table format.
+
+### Update: multi-noise Experiment 2 sweep + shorter runs
+- Refactor:
+  - Experiment 2 now runs over `label_noise_values_lowX = [0.0, 1e-2]` in one script execution.
+  - For each noise value, the script trains all deep widths and shallow baseline, then prints final decomposition summaries.
+- Runtime/cadence changes:
+  - `epochs_lowX = 200`
+  - `svd_every_epochs_lowX = 5`
+  - full metric table rows are printed every 5 epochs.
+  - singular values are appended in the same row (`top_sv`) at that same cadence.
+
+#### Run executed
+- Command: `python3.11 script.py`
+- Experiment 1 remained disabled for efficiency.
+
+#### Key observations from final decomposition (r=500 focus)
+- Noise `0.0`:
+  - `LowX-Deep(r=500)`: `support_fit_err=1.001e-04`, `model_nullX_norm=2.186e+00`
+  - `LowX-Shallow`: `support_fit_err=1.560e-04`, `model_nullX_norm=5.076e+00`
+- Noise `0.01`:
+  - `LowX-Deep(r=500)`: `support_fit_err=2.408e-03`, `model_nullX_norm=2.183e+00`
+  - `LowX-Shallow`: `support_fit_err=2.419e-03`, `model_nullX_norm=5.089e+00`
+
+#### Interpretation
+- Adding noise increases support-fit error (learnable-part error) as expected.
+- Deep vs shallow nullspace pattern persists under both noise levels: deep keeps significantly smaller `model_nullX_norm` than shallow.
