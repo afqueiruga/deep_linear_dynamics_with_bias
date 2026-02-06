@@ -290,3 +290,28 @@
 - Changed `top_sv_every_epochs_lowX` to match the main metric cadence exactly:
   - `top_sv_every_epochs_lowX = svd_every_epochs_lowX`
 - Result: top singular-value snapshots are now printed whenever the standard metric line is printed.
+
+### Update: label-noise option + noisy run observations
+- Added label-noise support in script:
+  - Helper: `add_label_noise(Y, noise_std, generator=None)`
+  - Config knobs:
+    - `label_noise_std_exp1` (currently `0.0`)
+    - `label_noise_std_lowX` (currently `1e-2`)
+- Noise is additive Gaussian on labels: `Y_noisy = Y + eps`, `eps ~ N(0, noise_std^2)`.
+
+#### Noisy run executed (Experiment 2)
+- Command: `python3.11 script.py`
+- Setting: `label_noise_std_lowX = 0.01`
+- Key checkpoints for `LowX-Deep(r=500)`:
+  - epoch 400: loss `1.003e-04`, `model_nullX_norm=2.171e+00`
+  - epoch 1000: loss `1.003e-04`, `model_nullX_norm=2.171e+00`
+  - epoch 1500: loss `1.003e-04`, `model_nullX_norm=2.171e+00`
+  - epoch 2000: loss `1.003e-04`, `model_nullX_norm=2.171e+00`
+- Shallow at epoch 2000:
+  - loss `1.003e-04`, `model_nullX_norm=5.074e+00`
+
+#### Observations
+- Loss plateaus around `~1e-4`, consistent with a noise floor for `noise_std=1e-2`.
+- Learnable support fit error for both deep and shallow is near `2.47e-3`.
+- Deep still keeps a smaller learned nullspace component than shallow (`2.17` vs `5.07`).
+- For `Deep(r=500)`, `model_nullX_norm` remains flat over long training under this schedule (no visible further decay).

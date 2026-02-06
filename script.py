@@ -20,6 +20,12 @@ def make_low_rank_inputs(n, d, kx, device="cpu"):
     X = Z @ Vx.T
     return X, Vx
 
+def add_label_noise(Y, noise_std, generator=None):
+    if noise_std <= 0:
+        return Y
+    noise = noise_std * torch.randn(Y.shape, device=Y.device, dtype=Y.dtype, generator=generator)
+    return Y + noise
+
 def effective_rank(s, eps=1e-12):
     p = s / (s.sum() + eps)
     H = -(p * (p + eps).log()).sum()
@@ -158,6 +164,8 @@ batch_size = n
 svd_every_epochs = 20     # compute SVD metrics only every few epochs
 rank_thresh = 1e-2
 run_experiment_1 = False  # disabled for efficiency; set True to re-enable
+# Label-noise options (set to >0 to enable additive Gaussian noise on Y).
+label_noise_std_exp1 = 0.0
 # Experiment-2-specific schedule to probe slow implicit regularization.
 epochs_lowX = 2000
 svd_every_epochs_lowX = 100
@@ -168,6 +176,7 @@ shallow_lr_decay_gamma_lowX = 1.0
 top_sv_every_epochs_lowX = svd_every_epochs_lowX
 top_sv_k = 10
 top_sv_method_lowX = "lowrank"  # "exact" or "lowrank"
+label_noise_std_lowX = 1e-2
 # Fixed projectors from A* used to track how training error moves across subspaces.
 P_left, P_right, P_left_perp, P_right_perp = make_error_projectors(A_star, k)
 
@@ -320,10 +329,14 @@ print(
 )
 
 if run_experiment_1:
+    g_noise_exp1 = torch.Generator(device=device)
+    g_noise_exp1.manual_seed(2026)
+    Y_train_exp1 = add_label_noise(Y, label_noise_std_exp1, generator=g_noise_exp1)
     with torch.no_grad():
         print("\n====================")
         print("Experiment 1: low-rank A*, full-rank X")
         print("====================")
+        print(f"label_noise_std_exp1={label_noise_std_exp1}")
         s_star = torch.sort(torch.linalg.svdvals(A_star), descending=True).values
         print("A* top-10 singular values:", s_star[:10].cpu().numpy())
     deep_results = {}
@@ -334,7 +347,7 @@ if run_experiment_1:
             model=deep_model,
             get_A_fn=lambda model: model.end_to_end(),
             X=X,
-            Y=Y,
+            Y=Y_train_exp1,
             A_star=A_star,
             lr=deep_lr,
             optimizer_name=deep_optimizer_name,
@@ -355,7 +368,7 @@ if run_experiment_1:
         model=shallow_model,
         get_A_fn=lambda model: model.weight,
         X=X,
-        Y=Y,
+        Y=Y_train_exp1,
         A_star=A_star,
         lr=shallow_lr,
         optimizer_name=shallow_optimizer_name,
@@ -400,6 +413,9 @@ kx = 5
 A_star_full = make_low_rank_matrix(m, d, k=min(m, d), device=device)  # full-rank target map
 X_low, _ = make_low_rank_inputs(n=n, d=d, kx=kx, device=device)
 Y_low = X_low @ A_star_full.T
+g_noise_lowX = torch.Generator(device=device)
+g_noise_lowX.manual_seed(2027)
+Y_low = add_label_noise(Y_low, label_noise_std_lowX, generator=g_noise_lowX)
 
 I_m = torch.eye(m, device=device)
 I_d = torch.eye(d, device=device)
@@ -444,6 +460,7 @@ with torch.no_grad():
         f"shallow_decay_gamma={shallow_lr_decay_gamma_lowX}, svd_every={svd_every_epochs_lowX}, "
         f"top_sv_every={top_sv_every_epochs_lowX}, top_sv_method={top_sv_method_lowX}"
     )
+    print(f"label_noise_std_lowX={label_noise_std_lowX}")
     print("A* (full) top-10 singular values:", s_full[:10].cpu().numpy())
     print(
         "||A*_learnable||_F={:.3e}, ||A*_unlearnable||_F={:.3e}".format(
