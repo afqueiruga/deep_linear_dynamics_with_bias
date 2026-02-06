@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
+torch.set_default_dtype(torch.float64)
+
 # ----------------------------
 # Utilities
 # ----------------------------
@@ -132,6 +134,19 @@ class DeepLinear(nn.Module):
     def forward(self, x):
         return x @ self.end_to_end().T
 
+class DeepLinear3(nn.Module):
+    def __init__(self, d, m, r, init_scale=0.01, device="cpu"):
+        super().__init__()
+        self.W1 = nn.Parameter(init_scale * torch.randn(m, r, device=device))
+        self.W2 = nn.Parameter(init_scale * torch.randn(r, r, device=device))
+        self.W3 = nn.Parameter(init_scale * torch.randn(r, d, device=device))
+
+    def end_to_end(self):
+        return self.W1 @ self.W2 @ self.W3
+
+    def forward(self, x):
+        return x @ self.end_to_end().T
+
 # ----------------------------
 # Experiment
 # ----------------------------
@@ -180,7 +195,14 @@ shallow_lr_decay_gamma_lowX = 1.0
 top_sv_every_epochs_lowX = svd_every_epochs_lowX
 top_sv_k = 10
 top_sv_method_lowX = "lowrank"  # "exact" or "lowrank"
-label_noise_values_lowX = [0.0, 1e-2]
+label_noise_values_lowX = [0.0]  # noisy run disabled for now (was [0.0, 1e-2])
+# Retuned no-noise schedule for near machine-precision fitting.
+epochs_lowX_no_noise = 2000
+svd_every_epochs_lowX_no_noise = 100
+deep_lr_lowX_no_noise = 2e-2
+deep_lr_decay_gamma_lowX_no_noise = 0.99
+shallow_lr_lowX_no_noise = 1e-2
+shallow_lr_decay_gamma_lowX_no_noise = 1.0
 # Fixed projectors from A* used to track how training error moves across subspaces.
 P_left, P_right, P_left_perp, P_right_perp = make_error_projectors(A_star, k)
 
@@ -476,6 +498,23 @@ with torch.no_grad():
     )
 
 for noise_idx, label_noise_std_lowX in enumerate(label_noise_values_lowX):
+    if label_noise_std_lowX == 0.0:
+        epochs_run = epochs_lowX_no_noise
+        svd_every_run = svd_every_epochs_lowX_no_noise
+        top_sv_every_run = svd_every_run
+        deep_lr_run = deep_lr_lowX_no_noise
+        deep_gamma_run = deep_lr_decay_gamma_lowX_no_noise
+        shallow_lr_run = shallow_lr_lowX_no_noise
+        shallow_gamma_run = shallow_lr_decay_gamma_lowX_no_noise
+    else:
+        epochs_run = epochs_lowX
+        svd_every_run = svd_every_epochs_lowX
+        top_sv_every_run = top_sv_every_epochs_lowX
+        deep_lr_run = deep_lr_lowX
+        deep_gamma_run = deep_lr_decay_gamma_lowX
+        shallow_lr_run = shallow_lr_lowX
+        shallow_gamma_run = shallow_lr_decay_gamma_lowX
+
     Y_low = X_low @ A_star_full.T
     g_noise_lowX = torch.Generator(device=device)
     g_noise_lowX.manual_seed(2027 + noise_idx)
@@ -483,26 +522,37 @@ for noise_idx, label_noise_std_lowX in enumerate(label_noise_values_lowX):
 
     print("\n--------------------")
     print(f"Experiment 2 run: label_noise_std_lowX={label_noise_std_lowX}")
+    print(
+        f"schedule: epochs={epochs_run}, svd_every={svd_every_run}, top_sv_every={top_sv_every_run}, "
+        f"deep_lr={deep_lr_run}, deep_gamma={deep_gamma_run}, "
+        f"shallow_lr={shallow_lr_run}, shallow_gamma={shallow_gamma_run}"
+    )
     print("--------------------")
 
-    deep_results_lowX = {}
-    deep_models_lowX = {}
+    deep2_results_lowX = {}
+    deep3_results_lowX = {}
+    deep2_models_lowX = {}
+    deep3_models_lowX = {}
     for r in deep_widths:
-        deep_model = DeepLinear(d=d, m=m, r=r, init_scale=0.01, device=device)
-        deep_models_lowX[r] = deep_model
-        deep_results_lowX[r] = train_model(
-            name=f"LowX-Deep(r={r})",
-            model=deep_model,
+        deep2_model = DeepLinear(d=d, m=m, r=r, init_scale=0.01, device=device)
+        deep3_model = DeepLinear3(d=d, m=m, r=r, init_scale=0.01, device=device)
+
+        deep2_models_lowX[r] = deep2_model
+        deep3_models_lowX[r] = deep3_model
+
+        deep2_results_lowX[r] = train_model(
+            name=f"LowX-Deep2(r={r})",
+            model=deep2_model,
             get_A_fn=lambda model: model.end_to_end(),
             X=X_low,
             Y=Y_low,
             A_star=A_star_full,
-            lr=deep_lr_lowX,
+            lr=deep_lr_run,
             optimizer_name=deep_optimizer_name,
-            lr_decay_gamma=deep_lr_decay_gamma_lowX,
-            epochs=epochs_lowX,
+            lr_decay_gamma=deep_gamma_run,
+            epochs=epochs_run,
             batch_size=batch_size,
-            svd_every_epochs=svd_every_epochs_lowX,
+            svd_every_epochs=svd_every_run,
             rank_thresh=rank_thresh,
             device=device,
             P_left=P_left2,
@@ -511,7 +561,33 @@ for noise_idx, label_noise_std_lowX in enumerate(label_noise_values_lowX):
             P_right_perp=P_right2_perp,
             model_null_proj=Q_x,
             model_null_label="model_nullX_norm",
-            top_sv_every_epochs=top_sv_every_epochs_lowX,
+            top_sv_every_epochs=top_sv_every_run,
+            top_sv_k=top_sv_k,
+            top_sv_method=top_sv_method_lowX,
+        )
+
+        deep3_results_lowX[r] = train_model(
+            name=f"LowX-Deep3(r={r})",
+            model=deep3_model,
+            get_A_fn=lambda model: model.end_to_end(),
+            X=X_low,
+            Y=Y_low,
+            A_star=A_star_full,
+            lr=deep_lr_run,
+            optimizer_name=deep_optimizer_name,
+            lr_decay_gamma=deep_gamma_run,
+            epochs=epochs_run,
+            batch_size=batch_size,
+            svd_every_epochs=svd_every_run,
+            rank_thresh=rank_thresh,
+            device=device,
+            P_left=P_left2,
+            P_right=P_right2,
+            P_left_perp=P_left2_perp,
+            P_right_perp=P_right2_perp,
+            model_null_proj=Q_x,
+            model_null_label="model_nullX_norm",
+            top_sv_every_epochs=top_sv_every_run,
             top_sv_k=top_sv_k,
             top_sv_method=top_sv_method_lowX,
         )
@@ -527,12 +603,12 @@ for noise_idx, label_noise_std_lowX in enumerate(label_noise_values_lowX):
         X=X_low,
         Y=Y_low,
         A_star=A_star_full,
-        lr=shallow_lr_lowX,
+        lr=shallow_lr_run,
         optimizer_name=shallow_optimizer_name,
-        lr_decay_gamma=shallow_lr_decay_gamma_lowX,
-        epochs=epochs_lowX,
+        lr_decay_gamma=shallow_gamma_run,
+        epochs=epochs_run,
         batch_size=batch_size,
-        svd_every_epochs=svd_every_epochs_lowX,
+        svd_every_epochs=svd_every_run,
         rank_thresh=rank_thresh,
         device=device,
         P_left=P_left2,
@@ -541,26 +617,40 @@ for noise_idx, label_noise_std_lowX in enumerate(label_noise_values_lowX):
         P_right_perp=P_right2_perp,
         model_null_proj=Q_x,
         model_null_label="model_nullX_norm",
-        top_sv_every_epochs=top_sv_every_epochs_lowX,
+        top_sv_every_epochs=top_sv_every_run,
         top_sv_k=top_sv_k,
         top_sv_method=top_sv_method_lowX,
     )
 
     print(f"\n[Experiment 2 final spectra | noise={label_noise_std_lowX}]")
     print("A* (full):", format_top_svs(torch.sort(torch.linalg.svdvals(A_star_full), descending=True).values, k=10))
+    print("A* (effective):", format_top_svs(torch.sort(torch.linalg.svdvals(A_star_learnable), descending=True).values, k=10))
     for r in deep_widths:
-        print(f"LowX-Deep(r={r}):", format_top_svs(deep_results_lowX[r]["top_sv"], k=10))
+        print(f"LowX-Deep2(r={r}):", format_top_svs(deep2_results_lowX[r]["top_sv"], k=10))
+    for r in deep_widths:
+        print(f"LowX-Deep3(r={r}):", format_top_svs(deep3_results_lowX[r]["top_sv"], k=10))
     print("LowX-Shallow:", format_top_svs(ms_lowX["top_sv"], k=10))
 
     print(f"\n[Experiment 2 identifiable vs null(X) decomposition | noise={label_noise_std_lowX}]")
     for r in deep_widths:
-        A_hat = deep_models_lowX[r].end_to_end()
+        A_hat = deep2_models_lowX[r].end_to_end()
         support_fit_err = ((A_hat - A_star_full) @ P_x).norm().item()
         learnable_target_err = (A_hat @ P_x - A_star_learnable).norm().item()
         model_nullX_norm = (A_hat @ Q_x).norm().item()
         target_nullX_norm = A_star_unlearnable.norm().item()
         print(
-            "LowX-Deep(r={}) support_fit_err={:.3e} learnable_target_err={:.3e} model_nullX_norm={:.3e} target_nullX_norm={:.3e}".format(
+            "LowX-Deep2(r={}) support_fit_err={:.3e} learnable_target_err={:.3e} model_nullX_norm={:.3e} target_nullX_norm={:.3e}".format(
+                r, support_fit_err, learnable_target_err, model_nullX_norm, target_nullX_norm
+            )
+        )
+    for r in deep_widths:
+        A_hat = deep3_models_lowX[r].end_to_end()
+        support_fit_err = ((A_hat - A_star_full) @ P_x).norm().item()
+        learnable_target_err = (A_hat @ P_x - A_star_learnable).norm().item()
+        model_nullX_norm = (A_hat @ Q_x).norm().item()
+        target_nullX_norm = A_star_unlearnable.norm().item()
+        print(
+            "LowX-Deep3(r={}) support_fit_err={:.3e} learnable_target_err={:.3e} model_nullX_norm={:.3e} target_nullX_norm={:.3e}".format(
                 r, support_fit_err, learnable_target_err, model_nullX_norm, target_nullX_norm
             )
         )

@@ -359,3 +359,47 @@
 #### Interpretation
 - Adding noise increases support-fit error (learnable-part error) as expected.
 - Deep vs shallow nullspace pattern persists under both noise levels: deep keeps significantly smaller `model_nullX_norm` than shallow.
+
+### Retune: why loss regressed and fix to recover ~1e-16+
+- Question: why did no-noise loss move from ~`1e-16`/lower to around `1e-4`?
+- Main causes:
+  - We shortened Experiment 2 runs to `200` epochs for the multi-noise sweep.
+  - That was not enough optimization steps for the no-noise case to converge to numerical precision.
+  - Additionally, float32 precision can impose a practical floor for extremely small losses.
+
+#### Retuning applied
+- Added per-noise schedule:
+  - For `noise=0.0`: longer run and stronger convergence settings
+    - `epochs=2000`, `deep_lr=2e-2`, `deep_gamma=0.99`, `shallow_lr=1e-2`.
+  - For noisy runs (`noise=0.01`): keep shorter sweep schedule (`epochs=200`).
+- Increased numerical precision for the script:
+  - `torch.set_default_dtype(torch.float64)`
+
+#### Verification (no-noise run)
+- `LowX-Deep(r=500)` at epoch 2000: loss `7.155e-31`
+- `LowX-Shallow` at epoch 2000: loss `2.372e-20`
+
+#### Conclusion
+- The regression to `~1e-4` came from under-training for the no-noise case (and precision limits).
+- With retuned schedule + float64, no-noise training loss is now far below `1e-16`.
+
+### Update: add 3-layer deep linear sweep, no-noise-only run
+- Added new model class:
+  - `DeepLinear3` with factors `[m, r] @ [r, r] @ [r, d]`.
+- Experiment 2 now sweeps both deep model families over same widths `r in [k, d, 2d, 10d]`:
+  - `LowX-Deep2(r=...)` (2-layer)
+  - `LowX-Deep3(r=...)` (3-layer)
+- Disabled noisy run for this pass:
+  - `label_noise_values_lowX = [0.0]`
+- Final summary now also prints spectrum of effective target:
+  - `A* (effective) = A* P_x`
+
+#### Validation run (noise=0.0)
+- Confirmed script prints both model families and final `A* (effective)` spectrum.
+- Example final metrics for `r=500`:
+  - `LowX-Deep2(r=500)`: `support_fit_err=1.949e-14`, `model_nullX_norm=2.557e+00`
+  - `LowX-Deep3(r=500)`: `support_fit_err=1.026e-11`, `model_nullX_norm=1.008e+01`
+  - `LowX-Shallow`: `support_fit_err=2.972e-05`, `model_nullX_norm=5.057e+00`
+
+#### Immediate observation
+- In this run, 3-layer deep model (at `r=500`) fits the learnable part very well but carries substantially larger nullspace mass than 2-layer and shallow.
