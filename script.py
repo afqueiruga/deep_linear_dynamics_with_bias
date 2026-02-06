@@ -140,6 +140,8 @@ deep_optimizer_name = "adam"
 shallow_optimizer_name = "adam"
 deep_lr = 2e-2
 shallow_lr = 1e-2
+deep_lr_decay_gamma = 0.99
+shallow_lr_decay_gamma = 1.0
 epochs = 400
 batch_size = n
 svd_every_epochs = 20     # compute SVD metrics only every few epochs
@@ -156,6 +158,7 @@ def train_model(
     A_star,
     lr,
     optimizer_name,
+    lr_decay_gamma,
     epochs,
     batch_size,
     svd_every_epochs,
@@ -173,6 +176,7 @@ def train_model(
         opt = optim.Adam(model.parameters(), lr=lr)
     else:
         raise ValueError(f"Unknown optimizer_name={optimizer_name}")
+    scheduler = optim.lr_scheduler.ExponentialLR(opt, gamma=lr_decay_gamma)
     loss_fn = nn.MSELoss()
     g = torch.Generator(device=device)
     g.manual_seed(seed)
@@ -194,7 +198,7 @@ def train_model(
     )
     # support_frac = ||P_left E P_right||_F / ||E||_F
     # null_frac    = ||P_left_perp E P_right_perp||_F / ||E||_F
-    print(f"{name} epoch | loss | rel_err | support_err | null_err | support_frac | null_frac")
+    print(f"{name} epoch | loss | rel_err | support_err | null_err | support_frac | null_frac | lr")
 
     for epoch in range(1, epochs + 1):
         loss_accum = 0.0
@@ -211,6 +215,8 @@ def train_model(
 
         avg_loss = loss_accum / steps
 
+        scheduler.step()
+
         if epoch == 1 or epoch % svd_every_epochs == 0 or epoch == epochs:
             with torch.no_grad():
                 m = summarize_A(
@@ -225,7 +231,8 @@ def train_model(
             print(
                 f"{name:7s} {epoch:5d} | {avg_loss:9.3e} | {m['rel_err']:.3e} | "
                 f"{m['err_support']:.3e} | {m['err_null']:.3e} | "
-                f"{m['err_support_frac']:.2f} | {m['err_null_frac']:.2f}"
+                f"{m['err_support_frac']:.2f} | {m['err_null_frac']:.2f} | "
+                f"lr={scheduler.get_last_lr()[0]:.3e}"
             )
 
     with torch.no_grad():
@@ -243,7 +250,9 @@ def train_model(
 print(
     f"device={device}, n={n}, d={d}, m={m}, true rank k={k}, deep_widths={deep_widths}, "
     f"deep_opt={deep_optimizer_name}, deep_lr={deep_lr}, "
+    f"deep_decay_gamma={deep_lr_decay_gamma}, "
     f"shallow_opt={shallow_optimizer_name}, shallow_lr={shallow_lr}, "
+    f"shallow_decay_gamma={shallow_lr_decay_gamma}, "
     f"epochs={epochs}, batch_size={batch_size}"
 )
 
@@ -262,6 +271,7 @@ for r in deep_widths:
         A_star=A_star,
         lr=deep_lr,
         optimizer_name=deep_optimizer_name,
+        lr_decay_gamma=deep_lr_decay_gamma,
         epochs=epochs,
         batch_size=batch_size,
         svd_every_epochs=svd_every_epochs,
@@ -282,6 +292,7 @@ ms = train_model(
     A_star=A_star,
     lr=shallow_lr,
     optimizer_name=shallow_optimizer_name,
+    lr_decay_gamma=shallow_lr_decay_gamma,
     epochs=epochs,
     batch_size=batch_size,
     svd_every_epochs=svd_every_epochs,

@@ -122,3 +122,33 @@
 - `Deep(r=5)` matches target singular spectrum almost exactly.
 - `Deep(r=50/100/500)` fit top-5 singular values well but retain larger residual tail than `Deep(r=5)` in this run.
 - `Shallow` also matches top-5 with near-zero tail.
+
+### Hyperparameter tuning: LR decay trial
+- Request: stabilize deep large-width behavior (especially `Deep(r=500)`) after observing late-epoch degradation.
+
+#### Trial H2 (added LR decay)
+- Code change:
+  - Added `ExponentialLR` scheduler inside `train_model(...)`.
+  - New per-model knobs:
+    - `deep_lr_decay_gamma`
+    - `shallow_lr_decay_gamma`
+  - Logged current LR in epoch printout.
+- Settings:
+  - Deep: Adam, `lr=2e-2`, `deep_lr_decay_gamma=0.99`
+  - Shallow: Adam, `lr=1e-2`, `shallow_lr_decay_gamma=1.0` (no decay)
+  - `epochs=400`, `batch_size=n`
+- Command:
+  - `python3.11 script.py` (filtered for key checkpoints)
+
+#### Key result for `Deep(r=500)`
+- With no decay (previous trial H1):
+  - epoch 200 loss: `5.060e-12`
+  - epoch 400 loss: `8.775e-07` (degraded)
+- With decay (H2):
+  - epoch 200 loss: `1.916e-12`
+  - epoch 400 loss: `4.328e-16` (no late degradation)
+- Final decomposition with decay:
+  - `support=3.943e-08`, `null=6.084e-07`, `mixed=1.877e-07`
+
+#### Decision
+- Keep LR decay enabled for deep models (`deep_lr_decay_gamma=0.99`).
