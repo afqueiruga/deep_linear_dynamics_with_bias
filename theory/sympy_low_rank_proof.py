@@ -17,6 +17,12 @@ The script uses SymPy MatrixSymbol expressions to derive:
 import sympy as sp
 
 
+def pprint_expr(label, expr):
+    print(label)
+    sp.pprint(expr, use_unicode=True)
+    print()
+
+
 def prove_matrix_dynamics():
     n, r = sp.symbols("n r", integer=True, positive=True)
     W = sp.MatrixSymbol("W", n, r)
@@ -84,22 +90,23 @@ def prove_mode_dynamics():
 
 
 def main():
+    sp.init_printing(use_unicode=True)
     matrix_result = prove_matrix_dynamics()
     mode_result = prove_mode_dynamics()
 
     print("=== Matrix-valued gradient-flow proof (2-layer deep linear) ===")
-    print(f"A := {matrix_result['A']}")
-    print(f"E := {matrix_result['E']}")
-    print(f"dW/dt = {matrix_result['dW']}")
-    print(f"dU/dt = {matrix_result['dU']}")
-    print(f"dA/dt = {matrix_result['dA']}")
-    print()
+    pprint_expr("A :=", matrix_result["A"])
+    pprint_expr("E :=", matrix_result["E"])
+    pprint_expr("dW/dt =", matrix_result["dW"])
+    pprint_expr("dU/dt =", matrix_result["dU"])
+    pprint_expr("dA/dt =", matrix_result["dA"])
+
     print("=== Singular-mode dynamics (aligned + balanced regime) ===")
-    print(f"dw/dt = {mode_result['dw']}")
-    print(f"du/dt = {mode_result['du']}")
-    print(f"ds/dt = {mode_result['ds']}")
-    print(f"Balanced law: ds/dt = {mode_result['ds_balanced']}")
-    print()
+    pprint_expr("dw/dt =", mode_result["dw"])
+    pprint_expr("du/dt =", mode_result["du"])
+    pprint_expr("ds/dt =", mode_result["ds"])
+    pprint_expr("Balanced law: ds/dt =", mode_result["ds_balanced"])
+
     print("All symbolic checks passed.")
 
 
