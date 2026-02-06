@@ -207,3 +207,16 @@
 #### Observation from this run
 - All models recover the identifiable support similarly well (`support_fit_err` near zero).
 - Deep models produce a smaller learned nullspace component than shallow in this setup (`~2.2-3.7` vs `~4.9`), but not exactly zero.
+
+### Update: support projector source in Experiment 2
+- Question addressed: what defines "support" when `A*` is full-rank but `X` is low-rank?
+- Change made:
+  - Support projector is now built from SVD of the observed training data `X_low`.
+  - Using `X_low = U_x S_x V_x^T`, we define identifiable domain support as `span(V_x)`.
+  - Projector used for decomposition: `P_x = V_x V_x^T` (feature/input space).
+- Clarification:
+  - `U_x` lives in sample/index space (`n`-dimensional), so it is not the right projector for decomposing parameter matrix error in `d`-dimensional input space.
+  - For error on `A` (shape `m x d`), the relevant subspace is on the right (input-feature) side.
+- Numerical rank handling:
+  - Added relative singular-value threshold `sv_tol = 1e-6 * max(s)` to estimate rank robustly.
+  - Verified output now reports: `X rank proxy kx=5, empirical rank from SVD=5`.

@@ -345,17 +345,26 @@ print(
 # ----------------------------
 kx = 5
 A_star_full = make_low_rank_matrix(m, d, k=min(m, d), device=device)  # full-rank target map
-X_low, Vx = make_low_rank_inputs(n=n, d=d, kx=kx, device=device)
+X_low, _ = make_low_rank_inputs(n=n, d=d, kx=kx, device=device)
 Y_low = X_low @ A_star_full.T
 
 I_m = torch.eye(m, device=device)
 I_d = torch.eye(d, device=device)
-P_x = Vx @ Vx.T
+
+# Build support from SVD of the observed training data X_low.
+# For X_low = U_x S_x V_x^T, the identifiable subspace for A is span(V_x) in input-feature space.
+# (U_x is in sample space and does not define the domain subspace of A.)
+_, sx_data, Vhx_data = torch.linalg.svd(X_low, full_matrices=False)
+# Numerical-rank threshold: keep singular directions above relative noise floor.
+sv_tol = 1e-6 * sx_data.max()
+rank_x_emp = int((sx_data > sv_tol).sum().item())
+Vx_data = Vhx_data[:rank_x_emp, :].T
+P_x = Vx_data @ Vx_data.T
 Q_x = I_d - P_x
 
 # For this experiment:
 # support  = error on identifiable input subspace: ||E P_x||_F
-# outside  = error on input nullspace          : ||E Q_x||_F
+# outside  = error on input nullspace           : ||E Q_x||_F
 # null     = set equal to outside by choosing P_left_perp = I_m.
 P_left2 = I_m
 P_right2 = P_x
@@ -367,7 +376,7 @@ with torch.no_grad():
     print("\n====================")
     print("Experiment 2: full-rank A*, low-rank X")
     print("====================")
-    print(f"X rank proxy kx={kx}")
+    print(f"X rank proxy kx={kx}, empirical rank from SVD={rank_x_emp}")
     print("A* (full) top-10 singular values:", s_full[:10].cpu().numpy())
 
 deep_results_lowX = {}
