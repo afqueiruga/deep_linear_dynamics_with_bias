@@ -366,6 +366,14 @@ Q_x = I_d - P_x
 # support  = error on identifiable input subspace: ||E P_x||_F
 # outside  = error on input nullspace           : ||E Q_x||_F
 # null     = set equal to outside by choosing P_left_perp = I_m.
+# Learnable target component from data support:
+# A*_learnable = A* P_x = A* U U^T, where U spans the input-data support.
+#
+# Here U is represented by Vx_data (right singular vectors of X_low), since
+# support for A (m x d) lives in input-feature space.
+A_star_learnable = A_star_full @ P_x
+A_star_unlearnable = A_star_full @ Q_x
+
 P_left2 = I_m
 P_right2 = P_x
 P_left2_perp = I_m
@@ -378,6 +386,11 @@ with torch.no_grad():
     print("====================")
     print(f"X rank proxy kx={kx}, empirical rank from SVD={rank_x_emp}")
     print("A* (full) top-10 singular values:", s_full[:10].cpu().numpy())
+    print(
+        "||A*_learnable||_F={:.3e}, ||A*_unlearnable||_F={:.3e}".format(
+            A_star_learnable.norm().item(), A_star_unlearnable.norm().item()
+        )
+    )
 
 deep_results_lowX = {}
 deep_models_lowX = {}
@@ -440,20 +453,22 @@ print("\n[Experiment 2 identifiable vs null(X) decomposition]")
 for r in deep_widths:
     A_hat = deep_models_lowX[r].end_to_end()
     support_fit_err = ((A_hat - A_star_full) @ P_x).norm().item()
+    learnable_target_err = (A_hat @ P_x - A_star_learnable).norm().item()
     model_nullX_norm = (A_hat @ Q_x).norm().item()
-    target_nullX_norm = (A_star_full @ Q_x).norm().item()
+    target_nullX_norm = A_star_unlearnable.norm().item()
     print(
-        "LowX-Deep(r={}) support_fit_err={:.3e} model_nullX_norm={:.3e} target_nullX_norm={:.3e}".format(
-            r, support_fit_err, model_nullX_norm, target_nullX_norm
+        "LowX-Deep(r={}) support_fit_err={:.3e} learnable_target_err={:.3e} model_nullX_norm={:.3e} target_nullX_norm={:.3e}".format(
+            r, support_fit_err, learnable_target_err, model_nullX_norm, target_nullX_norm
         )
     )
 
 A_hat_shallow_lowX = shallow_model_lowX.weight
 support_fit_err_shallow = ((A_hat_shallow_lowX - A_star_full) @ P_x).norm().item()
+learnable_target_err_shallow = (A_hat_shallow_lowX @ P_x - A_star_learnable).norm().item()
 model_nullX_norm_shallow = (A_hat_shallow_lowX @ Q_x).norm().item()
-target_nullX_norm_shallow = (A_star_full @ Q_x).norm().item()
+target_nullX_norm_shallow = A_star_unlearnable.norm().item()
 print(
-    "LowX-Shallow support_fit_err={:.3e} model_nullX_norm={:.3e} target_nullX_norm={:.3e}".format(
-        support_fit_err_shallow, model_nullX_norm_shallow, target_nullX_norm_shallow
+    "LowX-Shallow support_fit_err={:.3e} learnable_target_err={:.3e} model_nullX_norm={:.3e} target_nullX_norm={:.3e}".format(
+        support_fit_err_shallow, learnable_target_err_shallow, model_nullX_norm_shallow, target_nullX_norm_shallow
     )
 )

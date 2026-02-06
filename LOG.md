@@ -220,3 +220,15 @@
 - Numerical rank handling:
   - Added relative singular-value threshold `sv_tol = 1e-6 * max(s)` to estimate rank robustly.
   - Verified output now reports: `X rank proxy kx=5, empirical rank from SVD=5`.
+
+### Update: explicit learnable target matrix in Experiment 2
+- Added explicit decomposition of full-rank target:
+  - `A*_learnable = A* P_x` (your `A U U^T` form)
+  - `A*_unlearnable = A* Q_x`
+- Here `P_x` is built from SVD of training data `X_low` in feature space (`V_x V_x^T`).
+- Added printed norms:
+  - `||A*_learnable||_F`
+  - `||A*_unlearnable||_F`
+- Added direct learnable-fit metric for each model:
+  - `learnable_target_err = ||A_hat P_x - A*_learnable||_F`
+- This complements `support_fit_err = ||(A_hat - A*) P_x||_F` (numerically equivalent up to floating-point error).
