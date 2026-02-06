@@ -179,6 +179,8 @@ def train_model(
     P_right,
     P_left_perp,
     P_right_perp,
+    model_null_proj=None,
+    model_null_label="model_null_norm",
     seed=123,
 ):
     if optimizer_name.lower() == "sgd":
@@ -193,8 +195,9 @@ def train_model(
     g.manual_seed(seed)
 
     with torch.no_grad():
+        A0 = get_A_fn(model)
         m0 = summarize_A(
-            get_A_fn(model),
+            A0,
             A_star,
             thresh=rank_thresh,
             P_left=P_left,
@@ -202,6 +205,8 @@ def train_model(
             P_left_perp=P_left_perp,
             P_right_perp=P_right_perp,
         )
+        if model_null_proj is not None:
+            m0[model_null_label] = (A0 @ model_null_proj).norm().item()
     print(
         f"\n[{name} init] rel_err={m0['rel_err']:.3f} nuc={m0['nuc']:.3f} "
         f"effR={m0['eff_rank']:.2f} numR={m0['num_rank']} "
@@ -210,7 +215,13 @@ def train_model(
     # support_frac = ||P_left E P_right||_F / ||E||_F
     # outside_frac = ||E - P_left E P_right||_F / ||E||_F
     # null_frac    = ||P_left_perp E P_right_perp||_F / ||E||_F
-    print(f"{name} epoch | loss | rel_err | support_err | outside_err | null_err | support_frac | outside_frac | null_frac | lr")
+    if model_null_proj is None:
+        print(f"{name} epoch | loss | rel_err | support_err | outside_err | null_err | support_frac | outside_frac | null_frac | lr")
+    else:
+        print(
+            f"{name} epoch | loss | rel_err | support_err | outside_err | null_err | "
+            f"{model_null_label} | support_frac | outside_frac | null_frac | lr"
+        )
 
     for epoch in range(1, epochs + 1):
         loss_accum = 0.0
@@ -231,8 +242,9 @@ def train_model(
 
         if epoch == 1 or epoch % svd_every_epochs == 0 or epoch == epochs:
             with torch.no_grad():
+                A_cur = get_A_fn(model)
                 m = summarize_A(
-                    get_A_fn(model),
+                    A_cur,
                     A_star,
                     thresh=rank_thresh,
                     P_left=P_left,
@@ -240,12 +252,23 @@ def train_model(
                     P_left_perp=P_left_perp,
                     P_right_perp=P_right_perp,
                 )
-            print(
-                f"{name:7s} {epoch:5d} | {avg_loss:9.3e} | {m['rel_err']:.3e} | "
-                f"{m['err_support']:.3e} | {m['err_outside']:.3e} | {m['err_null']:.3e} | "
-                f"{m['err_support_frac']:.2f} | {m['err_outside_frac']:.2f} | {m['err_null_frac']:.2f} | "
-                f"lr={scheduler.get_last_lr()[0]:.3e}"
-            )
+                if model_null_proj is not None:
+                    m[model_null_label] = (A_cur @ model_null_proj).norm().item()
+            if model_null_proj is None:
+                print(
+                    f"{name:7s} {epoch:5d} | {avg_loss:9.3e} | {m['rel_err']:.3e} | "
+                    f"{m['err_support']:.3e} | {m['err_outside']:.3e} | {m['err_null']:.3e} | "
+                    f"{m['err_support_frac']:.2f} | {m['err_outside_frac']:.2f} | {m['err_null_frac']:.2f} | "
+                    f"lr={scheduler.get_last_lr()[0]:.3e}"
+                )
+            else:
+                print(
+                    f"{name:7s} {epoch:5d} | {avg_loss:9.3e} | {m['rel_err']:.3e} | "
+                    f"{m['err_support']:.3e} | {m['err_outside']:.3e} | {m['err_null']:.3e} | "
+                    f"{m[model_null_label]:.3e} | "
+                    f"{m['err_support_frac']:.2f} | {m['err_outside_frac']:.2f} | {m['err_null_frac']:.2f} | "
+                    f"lr={scheduler.get_last_lr()[0]:.3e}"
+                )
 
     with torch.no_grad():
         return summarize_A(
@@ -416,6 +439,8 @@ for r in deep_widths:
         P_right=P_right2,
         P_left_perp=P_left2_perp,
         P_right_perp=P_right2_perp,
+        model_null_proj=Q_x,
+        model_null_label="model_nullX_norm",
     )
 
 shallow_model_lowX = nn.Linear(d, m, bias=False, device=device)
@@ -441,6 +466,8 @@ ms_lowX = train_model(
     P_right=P_right2,
     P_left_perp=P_left2_perp,
     P_right_perp=P_right2_perp,
+    model_null_proj=Q_x,
+    model_null_label="model_nullX_norm",
 )
 
 print("\n[Experiment 2 final spectra]")

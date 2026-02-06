@@ -236,3 +236,9 @@
 ### Hypothesis (Experiment 2)
 - When `A*` is full-rank and `X` is low-rank, only `A*_learnable = A* U U^T` (support of training data) is identifiable.
 - Hypothesis: deep linear models will recover the learnable support component and drive their own nullspace component (`A_hat (I-UU^T)`) toward zero, while shallow linear models will retain a larger nullspace component.
+
+### Update: added per-epoch `model_nullX_norm` logging
+- Added optional model-space null component metric to `train_model(...)`:
+  - `model_nullX_norm = ||A_hat Q_x||_F`
+- Enabled this for Experiment 2 (both deep widths and shallow baseline).
+- This metric tracks exactly the quantity tied to the nullspace-bias hypothesis and is now logged every reporting epoch, alongside loss and error decomposition terms.
