@@ -94,3 +94,31 @@
 
 #### Selected configuration
 - Keep Trial H1 as default in `script.py`.
+
+### Update: Deep hidden-width sweep
+- Added deep model width sweep in `script.py` with widths:
+  - `r = k`
+  - `r = d`
+  - `r = 2d`
+  - `r = 10d`
+- Concretely with current dims (`k=5`, `d=50`): `deep_widths=[5, 50, 100, 500]`.
+- Implementation notes:
+  - Each width instantiates its own `DeepLinear` model.
+  - All deep models are trained sequentially with the same optimizer settings.
+  - Shallow `nn.Linear` baseline is still trained afterward for comparison.
+
+#### Run
+- Command: `python3.11 script.py`
+- Config: Adam/full-batch, `epochs=400`, deep lr `2e-2`, shallow lr `1e-2`.
+
+#### Final error decomposition by model
+- `Deep(r=5)`: `support=8.158e-08`, `null=4.467e-07`, `mixed=3.367e-07`
+- `Deep(r=50)`: `support=1.788e-06`, `null=2.145e-03`, `mixed=4.001e-05`
+- `Deep(r=100)`: `support=4.586e-07`, `null=6.682e-04`, `mixed=1.240e-05`
+- `Deep(r=500)`: `support=3.622e-02`, `null=1.527e-03`, `mixed=2.229e-02`
+- `Shallow`: `support=1.575e-07`, `null=1.029e-06`, `mixed=6.697e-07`
+
+#### Final spectra (top signal summary)
+- `Deep(r=5)` matches target singular spectrum almost exactly.
+- `Deep(r=50/100/500)` fit top-5 singular values well but retain larger residual tail than `Deep(r=5)` in this run.
+- `Shallow` also matches top-5 with near-zero tail.

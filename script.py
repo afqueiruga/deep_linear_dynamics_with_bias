@@ -121,7 +121,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 d = 50
 m = 50
 k = 5       # true rank
-r = 30      # hidden dim (overparameterized)
+deep_widths = [k, d, 2 * d, 10 * d]
 
 # Data
 n = 20000
@@ -130,7 +130,6 @@ A_star = make_low_rank_matrix(m, d, k, device=device)
 Y = X @ A_star.T
 
 # Models
-deep_model = DeepLinear(d=d, m=m, r=r, init_scale=0.01, device=device)
 shallow_model = nn.Linear(d, m, bias=False, device=device)
 with torch.no_grad():
     nn.init.normal_(shallow_model.weight, mean=0.0, std=0.01)
@@ -242,7 +241,7 @@ def train_model(
         )
 
 print(
-    f"device={device}, n={n}, d={d}, m={m}, true rank k={k}, hidden r={r}, "
+    f"device={device}, n={n}, d={d}, m={m}, true rank k={k}, deep_widths={deep_widths}, "
     f"deep_opt={deep_optimizer_name}, deep_lr={deep_lr}, "
     f"shallow_opt={shallow_optimizer_name}, shallow_lr={shallow_lr}, "
     f"epochs={epochs}, batch_size={batch_size}"
@@ -251,25 +250,29 @@ print(
 with torch.no_grad():
     s_star = torch.sort(torch.linalg.svdvals(A_star), descending=True).values
     print("A* top-10 singular values:", s_star[:10].cpu().numpy())
-md = train_model(
-    name="Deep",
-    model=deep_model,
-    get_A_fn=lambda model: model.end_to_end(),
-    X=X,
-    Y=Y,
-    A_star=A_star,
-    lr=deep_lr,
-    optimizer_name=deep_optimizer_name,
-    epochs=epochs,
-    batch_size=batch_size,
-    svd_every_epochs=svd_every_epochs,
-    rank_thresh=rank_thresh,
-    device=device,
-    P_left=P_left,
-    P_right=P_right,
-    P_left_perp=P_left_perp,
-    P_right_perp=P_right_perp,
-)
+deep_results = {}
+for r in deep_widths:
+    deep_model = DeepLinear(d=d, m=m, r=r, init_scale=0.01, device=device)
+    deep_results[r] = train_model(
+        name=f"Deep(r={r})",
+        model=deep_model,
+        get_A_fn=lambda model: model.end_to_end(),
+        X=X,
+        Y=Y,
+        A_star=A_star,
+        lr=deep_lr,
+        optimizer_name=deep_optimizer_name,
+        epochs=epochs,
+        batch_size=batch_size,
+        svd_every_epochs=svd_every_epochs,
+        rank_thresh=rank_thresh,
+        device=device,
+        P_left=P_left,
+        P_right=P_right,
+        P_left_perp=P_left_perp,
+        P_right_perp=P_right_perp,
+    )
+
 ms = train_model(
     name="Shallow",
     model=shallow_model,
@@ -293,14 +296,17 @@ ms = train_model(
 # Final spectra
 print("\n[Final top-10 singular values]")
 print("A*     :", torch.sort(torch.linalg.svdvals(A_star), descending=True).values[:10].cpu().numpy())
-print("Deep A :", md["top_sv"].numpy())
+for r in deep_widths:
+    print(f"Deep(r={r}):", deep_results[r]["top_sv"].numpy())
 print("Shallow:", ms["top_sv"].numpy())
 print("\n[Final error decomposition]")
-print(
-    "Deep    support={:.3e} null={:.3e} mixed={:.3e}".format(
-        md["err_support"], md["err_null"], md["err_mixed"]
+for r in deep_widths:
+    mr = deep_results[r]
+    print(
+        "Deep(r={}) support={:.3e} null={:.3e} mixed={:.3e}".format(
+            r, mr["err_support"], mr["err_null"], mr["err_mixed"]
+        )
     )
-)
 print(
     "Shallow support={:.3e} null={:.3e} mixed={:.3e}".format(
         ms["err_support"], ms["err_null"], ms["err_mixed"]
