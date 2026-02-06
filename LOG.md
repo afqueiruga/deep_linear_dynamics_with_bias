@@ -403,3 +403,92 @@
 
 #### Immediate observation
 - In this run, 3-layer deep model (at `r=500`) fits the learnable part very well but carries substantially larger nullspace mass than 2-layer and shallow.
+
+### Column glossary + interpretation (from `outputs/script_20260206_135825.log`)
+
+#### Output file used
+- `outputs/script_20260206_135825.log`
+
+#### Table columns (definitions)
+- `model`: model/run identifier (e.g., `LowX-Deep2(r=500)`, `LowX-Deep3(r=100)`, `LowX-Shallow`).
+- `epoch`: training epoch number. `0` is initialization snapshot before updates.
+- `loss`: training MSE on current labels `Y` (for this run, no label noise).
+- `lr`: optimizer learning rate at that epoch (after scheduler stepping policy).
+- `rel_err`: relative matrix error `||A_hat - A*||_F / ||A*||_F`.
+- `fro`: Frobenius norm `||A_hat||_F`.
+- `nuc`: nuclear norm `||A_hat||_*` (sum of singular values).
+- `spec`: spectral norm `||A_hat||_2` (largest singular value).
+- `eff_rank`: entropy-based effective rank of `A_hat` singular values.
+- `num_rank`: numeric rank proxy = number of singular values above threshold (`rank_thresh`).
+- `err_support`: `||P_left E P_right||_F`, with `E=A_hat-A*`. In Experiment 2 this is the identifiable part `||(A_hat-A*)P_x||_F`.
+- `err_outside`: `||E - P_left E P_right||_F`, all error outside that support block.
+- `err_null`: two-sided orthogonal block `||P_left_perp E P_right_perp||_F`. In Experiment 2 (`P_left=I`, `P_right=P_x`) this equals `||(A_hat-A*)Q_x||_F`.
+- `err_mixed`: residual cross-term block `||E - err_support_block - err_null_block||_F`.
+- `supp_frac`: `err_support / ||E||_F`.
+- `out_frac`: `err_outside / ||E||_F`.
+- `null_frac`: `err_null / ||E||_F`.
+- `mixed_frac`: `err_mixed / ||E||_F`.
+- `model_nullX_norm`: `||A_hat Q_x||_F`, learned model mass in unidentifiable input-nullspace directions.
+- `top_sv`: approximate top singular values of `A_hat` (here via `torch.svd_lowrank`, per config).
+
+#### Important interpretation notes
+- In Experiment 2, `A*` is full rank but `X` is low rank, so only `A*P_x` is learnable.
+- Because `A*Q_x` is large and unidentifiable, `rel_err`, `err_outside`, and `err_null` can stay large even when train `loss` is tiny.
+- Therefore, key metrics for learning behavior are:
+  - learnable-fit terms: `err_support` / `support_fit_err`
+  - implicit-bias terms: `model_nullX_norm`
+
+#### Trends observed in this run
+- Most models (except `Deep3(r=5)`) drive training `loss` extremely low by epoch 2000.
+- `Deep2` models:
+  - very small `support_fit_err` (down to `1.949e-14` at `r=500`).
+  - `model_nullX_norm` around `2.56` to `3.75`, better than shallow (`5.057`).
+- `Deep3` models:
+  - `r=50` and `r=100` fit support extremely well (`~1e-11` to `1e-12`) with `model_nullX_norm ~2.76-2.89`.
+  - `r=5` fails to fit support well (`support_fit_err ~1.167`, `loss ~5.47e-3`), indicating optimization/capacity limitations in this depth-width regime.
+  - `r=500` fits support (`~1e-11`) but has very large nullspace mass (`model_nullX_norm ~10.08`) and inflated spectrum (`spec ~9.01`, large `nuc`), suggesting severe parameter growth in unidentifiable directions.
+- Shallow model:
+  - support fit is good but not as tight as best deep runs (`~2.97e-05`).
+  - retains larger nullspace mass than well-behaved deep runs (`~5.06` vs `~2.6-2.9`).
+
+#### Conclusions implied by observations
+- In this low-rank-`X` setting, train loss alone is insufficient; matrix-space decomposition is necessary.
+- 2-layer deep linear models show a clearer beneficial implicit bias on nullspace suppression vs shallow (lower `model_nullX_norm`) while fitting support very accurately.
+- 3-layer behavior is more sensitive to width/optimization:
+  - can match support recovery,
+  - but may exhibit unstable or amplified nullspace components (notably `r=500`), weakening the desired implicit regularization effect.
+- Practical takeaway: deeper factorization does not uniformly improve low-rank implicit bias; monitor `model_nullX_norm`, spectral growth (`spec`, `nuc`, `top_sv`), and support-fit metrics together.
+
+### Deeper interpretation: literature hypotheses vs current observations
+
+#### Hypotheses going in (from deep linear dynamics literature)
+- **H1: Implicit low-complexity bias under factorization.**
+  - For linear regression solved via factorized parameters (e.g., `W U`), gradient descent from small init tends to favor low-complexity end-to-end maps (often discussed via nuclear-norm / effective-rank bias in the end-to-end matrix).
+- **H2: Mode-wise staged learning (“spectral filtering”).**
+  - Singular directions with stronger signal tend to be learned earlier/faster; weak directions are delayed.
+- **H3: Depth changes optimization timescales.**
+  - Greater depth can sharpen implicit bias in some regimes but also slows/complicates optimization and can make dynamics more sensitive to width/learning-rate/symmetry.
+- **H4: In underdetermined/partially identifiable settings, implicit bias should select among infinitely many interpolants.**
+  - Here, with low-rank `X`, only `A*P_x` is identifiable from data. A bias toward low-complexity solutions is expected to reduce learned mass in `Q_x` (tracked by `model_nullX_norm = ||A_hat Q_x||_F`).
+
+#### How this run compares to those hypotheses
+- **H4 supported for 2-layer deep vs shallow:**
+  - `Deep2` consistently achieved very small support-fit error and lower `model_nullX_norm` than shallow (`~2.56-3.75` vs `~5.06`).
+  - This matches the expected beneficial selection among interpolating solutions.
+- **H3 strongly visible for 3-layer:**
+  - `Deep3(r=50,100)` behaved well (small support-fit error and low-ish nullspace mass).
+  - `Deep3(r=5)` underfit (large support error), indicating optimization/capacity limits at this depth-width.
+  - `Deep3(r=500)` fit support but produced large nullspace mass (`~10.08`) and inflated top singular values (`spec ~9.01`), indicating depth-related optimization/symmetry issues can dominate and break the hoped-for nullspace suppression.
+- **H1/H2 partially supported, but conditional on stable optimization regime:**
+  - We do see low-rank/structured learning in many deep runs, but not uniformly across depth+width.
+  - In particular, depth-3 at very large width appears to exploit scale freedoms and land on a high-nullspace-norm interpolant despite tiny training loss.
+
+#### Revised conclusions (stronger version)
+- The experiments support a nuanced claim, not a blanket one:
+  - **2-layer deep linear** in this setting shows the expected implicit bias (better support recovery + smaller nullspace component than shallow).
+  - **3-layer deep linear** is more fragile: depending on width and optimization schedule, it can either match the bias or drift to high-norm nullspace solutions.
+- Therefore, the primary scientific takeaway is:
+  - **Implicit bias is architecture- and optimization-regime-dependent.**
+  - Increasing depth does not monotonically improve nullspace suppression in partially identifiable problems.
+- Practical implication for future experiments:
+  - When comparing implicit bias across depths, control for optimization artifacts (step size, decay, possible regularization, and per-layer balancing diagnostics), otherwise “depth effect” may be confounded by unstable factor scaling.
