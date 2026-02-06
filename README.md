@@ -5,7 +5,7 @@ AGENT NOTE: Do not modify this file unless explicitly told to.
 ```
 
 It is well known that deep linear, $\hat{y} = (WU)x$ models have a low-rank inductive bias.
-But what about deep linear models with biases, $\hat{y} = W(Ux+u) + w?
+But what about deep linear models with biases, $\hat{y} = W(Ux+u) + w$?
 
 This repo performs experiments to understand those training dynamics.
 
