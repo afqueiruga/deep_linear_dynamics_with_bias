@@ -69,11 +69,7 @@ U = nn.Parameter(0.01 * torch.randn(r, d, device=device))
 
 B = nn.Parameter(torch.zeros(m, d, device=device))  # shallow linear
 
-# Optimizers
 lr = 0.5
-opt_deep = optim.SGD([W, U], lr=lr)
-opt_shallow = optim.SGD([B], lr=lr)
-loss_fn = nn.MSELoss()
 
 # Logging / runtime knobs
 epochs = 50
@@ -81,73 +77,95 @@ batch_size = 512
 svd_every_epochs = 5     # compute SVD metrics only every few epochs
 rank_thresh = 1e-2
 
+def train_model(
+    name,
+    params,
+    predict_fn,
+    get_A_fn,
+    X,
+    Y,
+    A_star,
+    lr,
+    epochs,
+    batch_size,
+    svd_every_epochs,
+    rank_thresh,
+    device,
+    seed=123,
+):
+    opt = optim.SGD(params, lr=lr)
+    loss_fn = nn.MSELoss()
+    g = torch.Generator(device=device)
+    g.manual_seed(seed)
+
+    with torch.no_grad():
+        m0 = summarize_A(get_A_fn(), A_star, thresh=rank_thresh)
+    print(f"\n[{name} init] rel_err={m0['rel_err']:.3f} nuc={m0['nuc']:.3f} effR={m0['eff_rank']:.2f} numR={m0['num_rank']}")
+    print(f"{name} epoch | loss | rel_err | nuc | effR | numR")
+
+    for epoch in range(1, epochs + 1):
+        loss_accum = 0.0
+        steps = 0
+
+        for xb, yb in minibatches(X, Y, batch_size=batch_size, generator=g):
+            steps += 1
+            opt.zero_grad(set_to_none=True)
+            yhat = predict_fn(xb)
+            loss = loss_fn(yhat, yb)
+            loss.backward()
+            opt.step()
+            loss_accum += loss.item()
+
+        avg_loss = loss_accum / steps
+
+        if epoch == 1 or epoch % svd_every_epochs == 0 or epoch == epochs:
+            with torch.no_grad():
+                m = summarize_A(get_A_fn(), A_star, thresh=rank_thresh)
+            print(
+                f"{name:7s} {epoch:5d} | {avg_loss:9.3e} | {m['rel_err']:.3e} | "
+                f"{m['nuc']:.3f} | {m['eff_rank']:.2f} | {m['num_rank']:4d}"
+            )
+
+    with torch.no_grad():
+        return summarize_A(get_A_fn(), A_star, thresh=rank_thresh, topk=10)
+
 print(f"device={device}, n={n}, d={d}, m={m}, true rank k={k}, hidden r={r}, lr={lr}")
 
 with torch.no_grad():
     s_star = torch.sort(torch.linalg.svdvals(A_star), descending=True).values
     print("A* top-10 singular values:", s_star[:10].cpu().numpy())
-
-    md0 = summarize_A(W @ U, A_star, thresh=rank_thresh)
-    ms0 = summarize_A(B, A_star, thresh=rank_thresh)
-    print("\n[Init]")
-    print("  Deep   rel_err={:.3f} nuc={:.3f} effR={:.2f} numR={}".format(
-        md0["rel_err"], md0["nuc"], md0["eff_rank"], md0["num_rank"]))
-    print("  Shallow rel_err={:.3f} nuc={:.3f} effR={:.2f} numR={}".format(
-        ms0["rel_err"], ms0["nuc"], ms0["eff_rank"], ms0["num_rank"]))
-
-print("\nepoch | loss_deep | loss_shallow | rel_err_deep | rel_err_shallow | nuc_deep | nuc_shallow | effR_deep | effR_shallow | numR_deep | numR_shallow")
-
-g = torch.Generator(device=device)
-g.manual_seed(123)
-
-for epoch in range(1, epochs + 1):
-    # one epoch of SGD
-    deep_loss_accum = 0.0
-    shallow_loss_accum = 0.0
-    steps = 0
-
-    for xb, yb in minibatches(X, Y, batch_size=batch_size, generator=g):
-        steps += 1
-
-        # Deep update
-        opt_deep.zero_grad(set_to_none=True)
-        A_deep = W @ U
-        yhat_deep = xb @ A_deep.T
-        loss_deep = loss_fn(yhat_deep, yb)
-        loss_deep.backward()
-        opt_deep.step()
-
-        # Shallow update
-        opt_shallow.zero_grad(set_to_none=True)
-        yhat_shallow = xb @ B.T
-        loss_shallow = loss_fn(yhat_shallow, yb)
-        loss_shallow.backward()
-        opt_shallow.step()
-
-        deep_loss_accum += loss_deep.item()
-        shallow_loss_accum += loss_shallow.item()
-
-    avg_deep_loss = deep_loss_accum / steps
-    avg_shallow_loss = shallow_loss_accum / steps
-
-    # expensive metrics less frequently
-    if epoch == 1 or epoch % svd_every_epochs == 0 or epoch == epochs:
-        with torch.no_grad():
-            md = summarize_A(W @ U, A_star, thresh=rank_thresh)
-            ms = summarize_A(B, A_star, thresh=rank_thresh)
-        print(
-            f"{epoch:5d} | {avg_deep_loss:9.3e} | {avg_shallow_loss:11.3e} | "
-            f"{md['rel_err']:.3e} | {ms['rel_err']:.3e} | "
-            f"{md['nuc']:.3f} | {ms['nuc']:.3f} | "
-            f"{md['eff_rank']:.2f} | {ms['eff_rank']:.2f} | "
-            f"{md['num_rank']:8d} | {ms['num_rank']:10d}"
-        )
+md = train_model(
+    name="Deep",
+    params=[W, U],
+    predict_fn=lambda xb: xb @ (W @ U).T,
+    get_A_fn=lambda: W @ U,
+    X=X,
+    Y=Y,
+    A_star=A_star,
+    lr=lr,
+    epochs=epochs,
+    batch_size=batch_size,
+    svd_every_epochs=svd_every_epochs,
+    rank_thresh=rank_thresh,
+    device=device,
+)
+ms = train_model(
+    name="Shallow",
+    params=[B],
+    predict_fn=lambda xb: xb @ B.T,
+    get_A_fn=lambda: B,
+    X=X,
+    Y=Y,
+    A_star=A_star,
+    lr=lr,
+    epochs=epochs,
+    batch_size=batch_size,
+    svd_every_epochs=svd_every_epochs,
+    rank_thresh=rank_thresh,
+    device=device,
+)
 
 # Final spectra
-with torch.no_grad():
-    md = summarize_A(W @ U, A_star, thresh=rank_thresh, topk=10)
-    ms = summarize_A(B, A_star, thresh=rank_thresh, topk=10)
-
 print("\n[Final top-10 singular values]")
 print("A*     :", torch.sort(torch.linalg.svdvals(A_star), descending=True).values[:10].cpu().numpy())
 print("Deep A :", md["top_sv"].numpy())
