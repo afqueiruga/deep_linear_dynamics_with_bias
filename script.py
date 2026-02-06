@@ -19,7 +19,29 @@ def effective_rank(s, eps=1e-12):
     return torch.exp(H).item()
 
 @torch.no_grad()
-def summarize_A(A, A_star, thresh=1e-2, topk=10):
+def make_error_projectors(A_star, k):
+    U, _, Vh = torch.linalg.svd(A_star, full_matrices=True)
+    U_k = U[:, :k]
+    V_k = Vh[:k, :].T
+    P_left = U_k @ U_k.T
+    P_right = V_k @ V_k.T
+    I_left = torch.eye(A_star.shape[0], device=A_star.device, dtype=A_star.dtype)
+    I_right = torch.eye(A_star.shape[1], device=A_star.device, dtype=A_star.dtype)
+    P_left_perp = I_left - P_left
+    P_right_perp = I_right - P_right
+    return P_left, P_right, P_left_perp, P_right_perp
+
+@torch.no_grad()
+def summarize_A(
+    A,
+    A_star,
+    thresh=1e-2,
+    topk=10,
+    P_left=None,
+    P_right=None,
+    P_left_perp=None,
+    P_right_perp=None,
+):
     sv = torch.linalg.svdvals(A)
     sv = torch.sort(sv, descending=True).values
     fro = torch.linalg.norm(A, ord="fro").item()
@@ -27,8 +49,9 @@ def summarize_A(A, A_star, thresh=1e-2, topk=10):
     spec = sv[0].item()
     er = effective_rank(sv)
     num_rank = int((sv > thresh).sum().item())
-    rel_err = ((A - A_star).norm() / (A_star.norm() + 1e-12)).item()
-    return {
+    err = A - A_star
+    rel_err = (err.norm() / (A_star.norm() + 1e-12)).item()
+    out = {
         "rel_err": rel_err,
         "fro": fro,
         "nuc": nuc,
@@ -37,6 +60,27 @@ def summarize_A(A, A_star, thresh=1e-2, topk=10):
         "num_rank": num_rank,
         "top_sv": sv[:topk].cpu(),
     }
+    if (
+        P_left is not None
+        and P_right is not None
+        and P_left_perp is not None
+        and P_right_perp is not None
+    ):
+        err_support = P_left @ err @ P_right
+        err_null = P_left_perp @ err @ P_right_perp
+        err_mixed = err - err_support - err_null
+        err_norm = err.norm() + 1e-12
+        out.update(
+            {
+                "err_support": err_support.norm().item(),
+                "err_null": err_null.norm().item(),
+                "err_mixed": err_mixed.norm().item(),
+                "err_support_frac": (err_support.norm() / err_norm).item(),
+                "err_null_frac": (err_null.norm() / err_norm).item(),
+                "err_mixed_frac": (err_mixed.norm() / err_norm).item(),
+            }
+        )
+    return out
 
 def minibatches(X, Y, batch_size, generator=None):
     n = X.shape[0]
@@ -67,7 +111,7 @@ Y = X @ A_star.T
 W = nn.Parameter(0.01 * torch.randn(m, r, device=device))
 U = nn.Parameter(0.01 * torch.randn(r, d, device=device))
 
-B = nn.Parameter(torch.zeros(m, d, device=device))  # shallow linear
+B = nn.Parameter(0.01 * torch.randn(m, d, device=device))  # shallow linear
 
 lr = 0.5
 
@@ -76,6 +120,7 @@ epochs = 50
 batch_size = 512
 svd_every_epochs = 5     # compute SVD metrics only every few epochs
 rank_thresh = 1e-2
+P_left, P_right, P_left_perp, P_right_perp = make_error_projectors(A_star, k)
 
 def train_model(
     name,
@@ -91,6 +136,10 @@ def train_model(
     svd_every_epochs,
     rank_thresh,
     device,
+    P_left,
+    P_right,
+    P_left_perp,
+    P_right_perp,
     seed=123,
 ):
     opt = optim.SGD(params, lr=lr)
@@ -99,9 +148,21 @@ def train_model(
     g.manual_seed(seed)
 
     with torch.no_grad():
-        m0 = summarize_A(get_A_fn(), A_star, thresh=rank_thresh)
-    print(f"\n[{name} init] rel_err={m0['rel_err']:.3f} nuc={m0['nuc']:.3f} effR={m0['eff_rank']:.2f} numR={m0['num_rank']}")
-    print(f"{name} epoch | loss | rel_err | nuc | effR | numR")
+        m0 = summarize_A(
+            get_A_fn(),
+            A_star,
+            thresh=rank_thresh,
+            P_left=P_left,
+            P_right=P_right,
+            P_left_perp=P_left_perp,
+            P_right_perp=P_right_perp,
+        )
+    print(
+        f"\n[{name} init] rel_err={m0['rel_err']:.3f} nuc={m0['nuc']:.3f} "
+        f"effR={m0['eff_rank']:.2f} numR={m0['num_rank']} "
+        f"support={m0['err_support']:.3e} null={m0['err_null']:.3e}"
+    )
+    print(f"{name} epoch | loss | rel_err | support_err | null_err | support_frac | null_frac")
 
     for epoch in range(1, epochs + 1):
         loss_accum = 0.0
@@ -120,14 +181,32 @@ def train_model(
 
         if epoch == 1 or epoch % svd_every_epochs == 0 or epoch == epochs:
             with torch.no_grad():
-                m = summarize_A(get_A_fn(), A_star, thresh=rank_thresh)
+                m = summarize_A(
+                    get_A_fn(),
+                    A_star,
+                    thresh=rank_thresh,
+                    P_left=P_left,
+                    P_right=P_right,
+                    P_left_perp=P_left_perp,
+                    P_right_perp=P_right_perp,
+                )
             print(
                 f"{name:7s} {epoch:5d} | {avg_loss:9.3e} | {m['rel_err']:.3e} | "
-                f"{m['nuc']:.3f} | {m['eff_rank']:.2f} | {m['num_rank']:4d}"
+                f"{m['err_support']:.3e} | {m['err_null']:.3e} | "
+                f"{m['err_support_frac']:.2f} | {m['err_null_frac']:.2f}"
             )
 
     with torch.no_grad():
-        return summarize_A(get_A_fn(), A_star, thresh=rank_thresh, topk=10)
+        return summarize_A(
+            get_A_fn(),
+            A_star,
+            thresh=rank_thresh,
+            topk=10,
+            P_left=P_left,
+            P_right=P_right,
+            P_left_perp=P_left_perp,
+            P_right_perp=P_right_perp,
+        )
 
 print(f"device={device}, n={n}, d={d}, m={m}, true rank k={k}, hidden r={r}, lr={lr}")
 
@@ -148,6 +227,10 @@ md = train_model(
     svd_every_epochs=svd_every_epochs,
     rank_thresh=rank_thresh,
     device=device,
+    P_left=P_left,
+    P_right=P_right,
+    P_left_perp=P_left_perp,
+    P_right_perp=P_right_perp,
 )
 ms = train_model(
     name="Shallow",
@@ -163,6 +246,10 @@ ms = train_model(
     svd_every_epochs=svd_every_epochs,
     rank_thresh=rank_thresh,
     device=device,
+    P_left=P_left,
+    P_right=P_right,
+    P_left_perp=P_left_perp,
+    P_right_perp=P_right_perp,
 )
 
 # Final spectra
@@ -170,3 +257,14 @@ print("\n[Final top-10 singular values]")
 print("A*     :", torch.sort(torch.linalg.svdvals(A_star), descending=True).values[:10].cpu().numpy())
 print("Deep A :", md["top_sv"].numpy())
 print("Shallow:", ms["top_sv"].numpy())
+print("\n[Final error decomposition]")
+print(
+    "Deep    support={:.3e} null={:.3e} mixed={:.3e}".format(
+        md["err_support"], md["err_null"], md["err_mixed"]
+    )
+)
+print(
+    "Shallow support={:.3e} null={:.3e} mixed={:.3e}".format(
+        ms["err_support"], ms["err_null"], ms["err_mixed"]
+    )
+)
