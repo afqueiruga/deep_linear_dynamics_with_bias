@@ -108,29 +108,28 @@ def main():
         output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    md = []
-    md.append("# SymPy Proof: Low-Rank Dynamics for 2-Layer Deep Linear Model\n")
-    md.append("Model:\n")
-    md.append("$$\n\\hat{y} = W U x\n$$\n")
-    md.append("Whitened squared-loss setting:\n")
-    md.append("$$\nL(A) = \\frac{1}{2}\\|A - A_*\\|_F^2, \\quad A = WU\n$$\n")
+    with output_path.open("w", encoding="utf-8") as f:
+        f.write("# SymPy Proof: Low-Rank Dynamics for 2-Layer Deep Linear Model\n\n")
+        f.write("Model:\n\n")
+        f.write("$$\n\\hat{y} = W U x\n$$\n\n")
+        f.write("Whitened squared-loss setting:\n\n")
+        f.write("$$\nL(A) = \\frac{1}{2}\\|A - A_*\\|_F^2, \\quad A = WU\n$$\n\n")
 
-    md.append("## Matrix-Valued Gradient Flow\n")
-    md.append(md_equation("A := WU", matrix_result["A"]))
-    md.append(md_equation("E := A - A_*", matrix_result["E"]))
-    md.append(md_equation("dW/dt", matrix_result["dW"]))
-    md.append(md_equation("dU/dt", matrix_result["dU"]))
-    md.append(md_equation("dA/dt", matrix_result["dA"]))
+        f.write("## Matrix-Valued Gradient Flow\n\n")
+        f.write(md_equation("A := WU", matrix_result["A"]) + "\n")
+        f.write(md_equation("E := A - A_*", matrix_result["E"]) + "\n")
+        f.write(md_equation("dW/dt", matrix_result["dW"]) + "\n")
+        f.write(md_equation("dU/dt", matrix_result["dU"]) + "\n")
+        f.write(md_equation("dA/dt", matrix_result["dA"]) + "\n")
 
-    md.append("## Singular-Mode Dynamics (Aligned + Balanced Regime)\n")
-    md.append(md_equation("dw/dt", mode_result["dw"]))
-    md.append(md_equation("du/dt", mode_result["du"]))
-    md.append(md_equation("ds/dt", mode_result["ds"]))
-    md.append(md_equation("Balanced law: ds/dt", mode_result["ds_balanced"]))
+        f.write("## Singular-Mode Dynamics (Aligned + Balanced Regime)\n\n")
+        f.write(md_equation("dw/dt", mode_result["dw"]) + "\n")
+        f.write(md_equation("du/dt", mode_result["du"]) + "\n")
+        f.write(md_equation("ds/dt", mode_result["ds"]) + "\n")
+        f.write(md_equation("Balanced law: ds/dt", mode_result["ds_balanced"]) + "\n")
 
-    md.append("All symbolic checks passed.\n")
+        f.write("All symbolic checks passed.\n")
 
-    output_path.write_text("\n".join(md), encoding="utf-8")
     print(f"Wrote markdown proof to: {output_path}")
 
 
