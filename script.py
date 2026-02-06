@@ -13,6 +13,13 @@ def make_low_rank_matrix(m, d, k, singular_values=None, device="cpu"):
     S = torch.diag(singular_values)
     return U @ S @ V.T  # m x d
 
+def make_low_rank_inputs(n, d, kx, device="cpu"):
+    # X has rank <= kx by construction: X = Z Vx^T with Vx orthonormal columns.
+    Vx, _ = torch.linalg.qr(torch.randn(d, kx, device=device))
+    Z = torch.randn(n, kx, device=device) / (kx ** 0.5)
+    X = Z @ Vx.T
+    return X, Vx
+
 def effective_rank(s, eps=1e-12):
     p = s / (s.sum() + eps)
     H = -(p * (p + eps).log()).sum()
@@ -262,6 +269,9 @@ print(
 )
 
 with torch.no_grad():
+    print("\n====================")
+    print("Experiment 1: low-rank A*, full-rank X")
+    print("====================")
     s_star = torch.sort(torch.linalg.svdvals(A_star), descending=True).values
     print("A* top-10 singular values:", s_star[:10].cpu().numpy())
 deep_results = {}
@@ -326,5 +336,115 @@ for r in deep_widths:
 print(
     "Shallow support={:.3e} outside={:.3e} null={:.3e} mixed={:.3e}".format(
         ms["err_support"], ms["err_outside"], ms["err_null"], ms["err_mixed"]
+    )
+)
+
+# ----------------------------
+# Experiment 2
+# A* full rank, X low rank. Only A* on span(X) is identifiable from Y.
+# ----------------------------
+kx = 5
+A_star_full = make_low_rank_matrix(m, d, k=min(m, d), device=device)  # full-rank target map
+X_low, Vx = make_low_rank_inputs(n=n, d=d, kx=kx, device=device)
+Y_low = X_low @ A_star_full.T
+
+I_m = torch.eye(m, device=device)
+I_d = torch.eye(d, device=device)
+P_x = Vx @ Vx.T
+Q_x = I_d - P_x
+
+# For this experiment:
+# support  = error on identifiable input subspace: ||E P_x||_F
+# outside  = error on input nullspace          : ||E Q_x||_F
+# null     = set equal to outside by choosing P_left_perp = I_m.
+P_left2 = I_m
+P_right2 = P_x
+P_left2_perp = I_m
+P_right2_perp = Q_x
+
+with torch.no_grad():
+    s_full = torch.sort(torch.linalg.svdvals(A_star_full), descending=True).values
+    print("\n====================")
+    print("Experiment 2: full-rank A*, low-rank X")
+    print("====================")
+    print(f"X rank proxy kx={kx}")
+    print("A* (full) top-10 singular values:", s_full[:10].cpu().numpy())
+
+deep_results_lowX = {}
+deep_models_lowX = {}
+for r in deep_widths:
+    deep_model = DeepLinear(d=d, m=m, r=r, init_scale=0.01, device=device)
+    deep_models_lowX[r] = deep_model
+    deep_results_lowX[r] = train_model(
+        name=f"LowX-Deep(r={r})",
+        model=deep_model,
+        get_A_fn=lambda model: model.end_to_end(),
+        X=X_low,
+        Y=Y_low,
+        A_star=A_star_full,
+        lr=deep_lr,
+        optimizer_name=deep_optimizer_name,
+        lr_decay_gamma=deep_lr_decay_gamma,
+        epochs=epochs,
+        batch_size=batch_size,
+        svd_every_epochs=svd_every_epochs,
+        rank_thresh=rank_thresh,
+        device=device,
+        P_left=P_left2,
+        P_right=P_right2,
+        P_left_perp=P_left2_perp,
+        P_right_perp=P_right2_perp,
+    )
+
+shallow_model_lowX = nn.Linear(d, m, bias=False, device=device)
+with torch.no_grad():
+    nn.init.normal_(shallow_model_lowX.weight, mean=0.0, std=0.01)
+
+ms_lowX = train_model(
+    name="LowX-Shallow",
+    model=shallow_model_lowX,
+    get_A_fn=lambda model: model.weight,
+    X=X_low,
+    Y=Y_low,
+    A_star=A_star_full,
+    lr=shallow_lr,
+    optimizer_name=shallow_optimizer_name,
+    lr_decay_gamma=shallow_lr_decay_gamma,
+    epochs=epochs,
+    batch_size=batch_size,
+    svd_every_epochs=svd_every_epochs,
+    rank_thresh=rank_thresh,
+    device=device,
+    P_left=P_left2,
+    P_right=P_right2,
+    P_left_perp=P_left2_perp,
+    P_right_perp=P_right2_perp,
+)
+
+print("\n[Experiment 2 final spectra]")
+print("A* (full):", torch.sort(torch.linalg.svdvals(A_star_full), descending=True).values[:10].cpu().numpy())
+for r in deep_widths:
+    print(f"LowX-Deep(r={r}):", deep_results_lowX[r]["top_sv"].numpy())
+print("LowX-Shallow:", ms_lowX["top_sv"].numpy())
+
+print("\n[Experiment 2 identifiable vs null(X) decomposition]")
+for r in deep_widths:
+    A_hat = deep_models_lowX[r].end_to_end()
+    support_fit_err = ((A_hat - A_star_full) @ P_x).norm().item()
+    model_nullX_norm = (A_hat @ Q_x).norm().item()
+    target_nullX_norm = (A_star_full @ Q_x).norm().item()
+    print(
+        "LowX-Deep(r={}) support_fit_err={:.3e} model_nullX_norm={:.3e} target_nullX_norm={:.3e}".format(
+            r, support_fit_err, model_nullX_norm, target_nullX_norm
+        )
+    )
+
+A_hat_shallow_lowX = shallow_model_lowX.weight
+support_fit_err_shallow = ((A_hat_shallow_lowX - A_star_full) @ P_x).norm().item()
+model_nullX_norm_shallow = (A_hat_shallow_lowX @ Q_x).norm().item()
+target_nullX_norm_shallow = (A_star_full @ Q_x).norm().item()
+print(
+    "LowX-Shallow support_fit_err={:.3e} model_nullX_norm={:.3e} target_nullX_norm={:.3e}".format(
+        support_fit_err_shallow, model_nullX_norm_shallow, target_nullX_norm_shallow
     )
 )

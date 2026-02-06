@@ -172,3 +172,38 @@
 - Code updates in `script.py`:
   - Added `err_outside` and `err_outside_frac` to `summarize_A(...)`.
   - Updated init/epoch/final logging to include `outside_err` and `outside_frac`.
+
+### Update: Experiment 2 (full-rank `A*`, low-rank `X`)
+- Added a second setting to test identifiability from low-rank inputs.
+- Construction:
+  - `A*` is full rank (`k=min(m,d)`).
+  - `X` is rank-`kx` via `X = Z Vx^T` with `kx=5`.
+  - `Y = X A*^T`.
+- Rationale:
+  - Only `A*` restricted to `span(X)` is identifiable from data.
+  - Components along `null(X)` cannot be inferred from training loss.
+
+#### Metrics used in Experiment 2
+- Let `P_x` project onto `span(X)` and `Q_x = I - P_x`.
+- `support_fit_err = ||(A_hat - A*) P_x||_F` (learnable part fit error).
+- `model_nullX_norm = ||A_hat Q_x||_F` (what model places in unidentifiable nullspace).
+- `target_nullX_norm = ||A* Q_x||_F` (target mass in that nullspace; not learnable from data).
+
+#### Run (same optimizer schedule)
+- Deep widths: `[5, 50, 100, 500]`.
+- Deep: Adam `2e-2`, decay gamma `0.99`.
+- Shallow: Adam `1e-2`, no decay.
+- `epochs=400`, full batch.
+
+#### Key outputs (epoch 400)
+- Training loss is very low for all models (`~1e-14`), but `rel_err` remains high (`~0.95`) because unidentifiable nullspace mismatch dominates matrix error.
+- Identifiable/nullspace summary:
+  - `LowX-Deep(r=5)`: `support_fit_err=3.913e-06`, `model_nullX_norm=3.681e+00`, `target_nullX_norm=2.156e+01`
+  - `LowX-Deep(r=50)`: `support_fit_err=7.472e-07`, `model_nullX_norm=2.267e+00`, `target_nullX_norm=2.156e+01`
+  - `LowX-Deep(r=100)`: `support_fit_err=6.758e-07`, `model_nullX_norm=2.313e+00`, `target_nullX_norm=2.156e+01`
+  - `LowX-Deep(r=500)`: `support_fit_err=6.308e-07`, `model_nullX_norm=2.204e+00`, `target_nullX_norm=2.156e+01`
+  - `LowX-Shallow`: `support_fit_err=7.620e-07`, `model_nullX_norm=4.884e+00`, `target_nullX_norm=2.156e+01`
+
+#### Observation from this run
+- All models recover the identifiable support similarly well (`support_fit_err` near zero).
+- Deep models produce a smaller learned nullspace component than shallow in this setup (`~2.2-3.7` vs `~4.9`), but not exactly zero.
