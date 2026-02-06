@@ -1,26 +1,23 @@
 #!/usr/bin/env python3
 """
-Symbolic proof sketch for low-rank training dynamics of a 2-layer deep linear model
+Symbolic proof sketch for low-rank training dynamics of a 2-layer deep linear model.
 
-    y_hat = W U x
-
-under squared loss in the whitened setting:
-
-    L(A) = 1/2 ||A - A_*||_F^2,  A = WU.
-
-The script uses SymPy MatrixSymbol expressions to derive:
-1) Gradient-flow updates for W and U.
-2) The induced ODE for A = WU.
-3) Per-singular-mode logistic dynamics in the balanced diagonal regime.
+The script derives symbolic identities with SymPy MatrixSymbols and writes a
+Markdown report containing LaTeX equations.
 """
 
+import argparse
+from datetime import datetime
+from pathlib import Path
 import sympy as sp
 
 
-def pprint_expr(label, expr):
-    print(label)
-    sp.pprint(expr, use_unicode=True)
-    print()
+def md_block_math(expr):
+    return "$$\n" + sp.latex(expr) + "\n$$\n"
+
+
+def md_equation(label, expr):
+    return f"**{label}**\n\n{md_block_math(expr)}"
 
 
 def prove_matrix_dynamics():
@@ -90,24 +87,51 @@ def prove_mode_dynamics():
 
 
 def main():
-    sp.init_printing(use_unicode=True)
+    parser = argparse.ArgumentParser(
+        description="Generate a Markdown+LaTeX proof report for deep linear low-rank dynamics."
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="Optional output markdown path. Defaults to outputs/theory_sympy_low_rank_proof_<timestamp>.md",
+    )
+    args = parser.parse_args()
+
     matrix_result = prove_matrix_dynamics()
     mode_result = prove_mode_dynamics()
 
-    print("=== Matrix-valued gradient-flow proof (2-layer deep linear) ===")
-    pprint_expr("A :=", matrix_result["A"])
-    pprint_expr("E :=", matrix_result["E"])
-    pprint_expr("dW/dt =", matrix_result["dW"])
-    pprint_expr("dU/dt =", matrix_result["dU"])
-    pprint_expr("dA/dt =", matrix_result["dA"])
+    if args.output is None:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = Path("outputs") / f"theory_sympy_low_rank_proof_{ts}.md"
+    else:
+        output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    print("=== Singular-mode dynamics (aligned + balanced regime) ===")
-    pprint_expr("dw/dt =", mode_result["dw"])
-    pprint_expr("du/dt =", mode_result["du"])
-    pprint_expr("ds/dt =", mode_result["ds"])
-    pprint_expr("Balanced law: ds/dt =", mode_result["ds_balanced"])
+    md = []
+    md.append("# SymPy Proof: Low-Rank Dynamics for 2-Layer Deep Linear Model\n")
+    md.append("Model:\n")
+    md.append("$$\n\\hat{y} = W U x\n$$\n")
+    md.append("Whitened squared-loss setting:\n")
+    md.append("$$\nL(A) = \\frac{1}{2}\\|A - A_*\\|_F^2, \\quad A = WU\n$$\n")
 
-    print("All symbolic checks passed.")
+    md.append("## Matrix-Valued Gradient Flow\n")
+    md.append(md_equation("A := WU", matrix_result["A"]))
+    md.append(md_equation("E := A - A_*", matrix_result["E"]))
+    md.append(md_equation("dW/dt", matrix_result["dW"]))
+    md.append(md_equation("dU/dt", matrix_result["dU"]))
+    md.append(md_equation("dA/dt", matrix_result["dA"]))
+
+    md.append("## Singular-Mode Dynamics (Aligned + Balanced Regime)\n")
+    md.append(md_equation("dw/dt", mode_result["dw"]))
+    md.append(md_equation("du/dt", mode_result["du"]))
+    md.append(md_equation("ds/dt", mode_result["ds"]))
+    md.append(md_equation("Balanced law: ds/dt", mode_result["ds_balanced"]))
+
+    md.append("All symbolic checks passed.\n")
+
+    output_path.write_text("\n".join(md), encoding="utf-8")
+    print(f"Wrote markdown proof to: {output_path}")
 
 
 if __name__ == "__main__":
