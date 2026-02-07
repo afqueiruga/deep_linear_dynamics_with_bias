@@ -91,6 +91,65 @@ def prove_mode_dynamics():
     }
 
 
+def prove_output_bias_dynamics():
+    """
+    Bias-at-output model:
+        y_hat = W U x + w
+
+    For population squared loss with input mean mu and covariance I:
+        L = 1/2 E || (A-A_*)x + (w-w_*) ||^2
+          = 1/2 ||A-A_*||_F^2
+            + <A-A_*, (w-w_*) mu^T>
+            + 1/2 ||w-w_*||^2
+            + const
+    where A = WU.
+    """
+    n, r = sp.symbols("n r", integer=True, positive=True)
+    W = sp.MatrixSymbol("W", n, r)
+    U = sp.MatrixSymbol("U", r, n)
+    A_star = sp.MatrixSymbol("A_star", n, n)
+    w = sp.MatrixSymbol("w", n, 1)
+    w_star = sp.MatrixSymbol("w_star", n, 1)
+    mu = sp.MatrixSymbol("mu", n, 1)
+
+    A = W * U
+    E = A - A_star
+    e = w - w_star
+
+    # Gradient wrt A and w for non-centered inputs (mean mu, covariance I).
+    gA = E + e * mu.T
+    gw = E * mu + e
+
+    # Chain-rule to factors.
+    dW = -gA * U.T
+    dU = -W.T * gA
+    dw = -gw
+    dA = dW * U + W * dU
+    dA_expected = -gA * (U.T * U) - (W * W.T) * gA
+    assert sp.srepr(dA) == sp.srepr(dA_expected)
+
+    # Zero-mean specialization (mu=0): bias decouples from factor dynamics.
+    dW_mu0 = -E * U.T
+    dU_mu0 = -W.T * E
+    dw_mu0 = -e
+
+    return {
+        "A": A,
+        "E": E,
+        "e": e,
+        "mu": mu,
+        "gA": gA,
+        "gw": gw,
+        "dW": dW,
+        "dU": dU,
+        "dw": dw,
+        "dA": dA,
+        "dW_mu0": dW_mu0,
+        "dU_mu0": dU_mu0,
+        "dw_mu0": dw_mu0,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Generate a Markdown+LaTeX proof report for deep linear low-rank dynamics."
@@ -105,6 +164,7 @@ def main():
 
     matrix_result = prove_matrix_dynamics()
     mode_result = prove_mode_dynamics()
+    bias_result = prove_output_bias_dynamics()
     sigma, s = sp.symbols("sigma s", real=True)
     off_target_decay = sp.simplify(mode_result["ds_balanced"].subs({sigma: 0}))
 
@@ -222,6 +282,109 @@ def main():
             "target-aligned modes grow with logistic-type dynamics, while off-target modes decay "
             "in the balanced/aligned reduction.\n\n"
         )
+
+        f.write("## Output-Bias Model: $\\hat{y} = WUx + w$\n\n")
+        f.write(
+            "Assume population squared loss with `E[xx^T]=I` and mean `E[x]=\\mu`, target "
+            "`y_* = A_*x + w_*`, and definitions `A=WU`, `E=A-A_*`, `e=w-w_*`.\n\n"
+        )
+        write_equation_with_note(
+            f,
+            "Gradient wrt A",
+            bias_result["gA"],
+            (
+                "Interpretation: compared to the no-bias case, there is an extra rank-1 coupling term "
+                "`e\\mu^T`. Nonzero bias error and nonzero input mean tilt the factor updates."
+            ),
+        )
+        write_equation_with_note(
+            f,
+            "Gradient wrt w",
+            bias_result["gw"],
+            (
+                "Interpretation: bias update sees both direct bias error `e` and projection of matrix "
+                "error through mean input `E\\mu`."
+            ),
+        )
+        write_equation_with_note(
+            f,
+            "dW/dt",
+            bias_result["dW"],
+            (
+                "Conclusion: factor dynamics are now driven by `E + e\\mu^T`; this is the precise change "
+                "from the pure deep linear model."
+            ),
+        )
+        write_equation_with_note(
+            f,
+            "dU/dt",
+            bias_result["dU"],
+            (
+                "Conclusion: same coupling appears in `U` updates, so bias mismatch can feed back into "
+                "mode growth when `\\mu \\neq 0`."
+            ),
+        )
+        write_equation_with_note(
+            f,
+            "dw/dt",
+            bias_result["dw"],
+            (
+                "Conclusion: bias is not generally independent unless inputs are centered "
+                "(`\\mu=0`)."
+            ),
+        )
+        write_equation_with_note(
+            f,
+            "dA/dt",
+            bias_result["dA"],
+            (
+                "Interpretation: the end-to-end map keeps the same Gram-preconditioned structure, but "
+                "with effective residual `E + e\\mu^T`."
+            ),
+        )
+
+        f.write("### Centered-input specialization (`\\mu = 0`)\n\n")
+        write_equation_with_note(
+            f,
+            "dW/dt |_{mu=0}",
+            bias_result["dW_mu0"],
+            "Same as the original deep linear model.",
+        )
+        write_equation_with_note(
+            f,
+            "dU/dt |_{mu=0}",
+            bias_result["dU_mu0"],
+            "Same as the original deep linear model.",
+        )
+        write_equation_with_note(
+            f,
+            "dw/dt |_{mu=0}",
+            bias_result["dw_mu0"],
+            (
+                "Bias decouples and follows first-order linear decay to `w_*`. If `w_*=0`, then "
+                "`w(t)=w(0)e^{-t}`."
+            ),
+        )
+
+        f.write("### Initialization cases (for `w_*=0`)\n\n")
+        f.write(
+            "1. `w(0)=0`: with centered inputs, `dw/dt=-w` implies `w(t)=0` for all `t`. "
+            "So `W,U` dynamics are exactly unchanged from the no-bias deep linear model.\n\n"
+        )
+        f.write(
+            "2. `w(0)` random small (same scale as factor init): with centered inputs, "
+            "`w(t)=w(0)e^{-t}` and decays on O(1) time; `W,U` still follow the original deep linear "
+            "dynamics. With non-centered inputs (`mu!=0`), this initial bias transient induces an extra "
+            "term `e\\mu^T` in factor updates, creating temporary coupling between bias and low-rank mode "
+            "evolution.\n\n"
+        )
+        f.write(
+            "**What changes vs deep linear without bias?**\n\n"
+            "- If inputs are centered, only an independent bias-decay channel is added.\n"
+            "- If inputs are not centered, bias error couples into factor learning through `e\\mu^T`, "
+            "so early dynamics can differ until bias error shrinks.\n\n"
+        )
+
         f.write("All symbolic checks passed.\n")
 
     print(f"Wrote markdown proof to: {output_path}")

@@ -38,3 +38,18 @@ Running notebook for symbolic/theoretical results (separate from numerical exper
 - For target-aligned modes (`sigma > 0`): small `s` grows slowly at first, then accelerates, then saturates.
 - For off-target modes (`sigma = 0`): `ds/dt = -2 s^2 <= 0`, so these modes decay toward zero.
 - Interpretation: the mechanism is dual-purpose in this regime: it promotes target modes and suppresses non-target directions.
+
+## 2026-02-07 (output bias case added)
+
+- Added a second symbolic routine in `theory/sympy_low_rank_proof.py` for the model `y = WUx + w`.
+- Derived population-loss dynamics with `E[xx^T]=I`, `E[x]=mu`, target `y_* = A_*x + w_*`:
+  - `g_A = (A-A_*) + (w-w_*) mu^T`
+  - `g_w = (A-A_*) mu + (w-w_*)`
+  - `dW/dt = -g_A U^T`, `dU/dt = -W^T g_A`, `dw/dt = -g_w`.
+- Main difference from bias-free deep linear:
+  - If `mu != 0`, bias error couples into factor learning via the rank-1 term `(w-w_*) mu^T`.
+  - If `mu = 0`, factor dynamics are unchanged and bias decouples as `dw/dt = -(w-w_*)`.
+- Initialization comparison for `w_*=0` (centered inputs):
+  - `w(0)=0`  ->  `w(t)=0` for all `t`; exactly same `W,U` dynamics as deep linear.
+  - `w(0)` random small  ->  `w(t)=w(0)e^{-t}`; transient bias decays independently.
+- Saved report: `outputs/theory_sympy_low_rank_proof_20260207_121028.md`.
