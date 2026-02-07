@@ -53,3 +53,27 @@ Running notebook for symbolic/theoretical results (separate from numerical exper
   - `w(0)=0`  ->  `w(t)=0` for all `t`; exactly same `W,U` dynamics as deep linear.
   - `w(0)` random small  ->  `w(t)=w(0)e^{-t}`; transient bias decays independently.
 - Saved report: `outputs/theory_sympy_low_rank_proof_20260207_121028.md`.
+
+## 2026-02-07 (inner bias case added)
+
+- Added third symbolic routine in `theory/sympy_low_rank_proof.py` for `y = W(Ux + u) + w`.
+- Definitions used: `A=WU`, `b=Wu+w`, `E=A-A_*`, `e=b-b_*`, with `E[xx^T]=I`, `E[x]=mu`.
+- Derived gradients:
+  - `g_A = E + e mu^T`
+  - `g_b = E mu + e`
+- Derived dynamics:
+  - `dW/dt = -(g_A U^T + g_b u^T)`
+  - `dU/dt = -W^T g_A`
+  - `du/dt = -W^T g_b`
+  - `dw/dt = -g_b`
+- Key change vs previous models:
+  - New multiplicative coupling term `g_b u^T` enters `dW/dt`.
+  - Therefore, even with centered inputs (`mu=0`), factor dynamics are modified once `u` is nonzero.
+- Inner-bias-only subcase (`w=0`, `mu=0`):
+  - `dW/dt = -(Wu-b_*)u^T + (A_* - WU)U^T`
+  - `dU/dt = -W^T(-A_* + WU)`
+  - `du/dt = -W^T(Wu-b_*)`
+- Initialization comparison (`w=0`, centered):
+  - `u(0)=0`: matrix channel starts like deep linear, but `du/dt` is generally nonzero so coupling turns on shortly after.
+  - `u(0)` random small: coupling is active from time zero.
+- Saved report: `outputs/theory_sympy_low_rank_proof_20260207_131004.md`.

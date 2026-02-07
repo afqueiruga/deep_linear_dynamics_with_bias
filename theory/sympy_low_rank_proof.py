@@ -150,6 +150,76 @@ def prove_output_bias_dynamics():
     }
 
 
+def prove_inner_bias_dynamics():
+    """
+    Inner + output bias model:
+        y_hat = W (U x + u) + w = A x + b
+    with
+        A = WU,  b = Wu + w.
+    """
+    n, r = sp.symbols("n r", integer=True, positive=True)
+    W = sp.MatrixSymbol("W", n, r)
+    U = sp.MatrixSymbol("U", r, n)
+    u = sp.MatrixSymbol("u", r, 1)
+    w = sp.MatrixSymbol("w", n, 1)
+    A_star = sp.MatrixSymbol("A_star", n, n)
+    b_star = sp.MatrixSymbol("b_star", n, 1)
+    mu = sp.MatrixSymbol("mu", n, 1)
+
+    A = W * U
+    b = W * u + w
+    E = A - A_star
+    e = b - b_star
+
+    # Population gradients for E[xx^T]=I, E[x]=mu.
+    gA = E + e * mu.T
+    gb = E * mu + e
+
+    # Chain-rule gradients wrt factors and biases.
+    dW = -(gA * U.T + gb * u.T)
+    dU = -W.T * gA
+    du = -W.T * gb
+    dw = -gb
+
+    dA = dW * U + W * dU
+
+    db = dW * u + W * du + dw
+
+    # Centered-input specialization.
+    dW_mu0 = -E * U.T - e * u.T
+    dU_mu0 = -W.T * E
+    du_mu0 = -W.T * e
+    dw_mu0 = -e
+
+    # Special subcase: centered inputs and no output bias (w = 0).
+    e_wo = W * u - b_star
+    dW_mu0_w0 = -E * U.T - e_wo * u.T
+    dU_mu0_w0 = -W.T * E
+    du_mu0_w0 = -W.T * e_wo
+
+    return {
+        "A": A,
+        "b": b,
+        "E": E,
+        "e": e,
+        "gA": gA,
+        "gb": gb,
+        "dW": dW,
+        "dU": dU,
+        "du": du,
+        "dw": dw,
+        "dA": dA,
+        "db": db,
+        "dW_mu0": dW_mu0,
+        "dU_mu0": dU_mu0,
+        "du_mu0": du_mu0,
+        "dw_mu0": dw_mu0,
+        "dW_mu0_w0": dW_mu0_w0,
+        "dU_mu0_w0": dU_mu0_w0,
+        "du_mu0_w0": du_mu0_w0,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Generate a Markdown+LaTeX proof report for deep linear low-rank dynamics."
@@ -165,6 +235,7 @@ def main():
     matrix_result = prove_matrix_dynamics()
     mode_result = prove_mode_dynamics()
     bias_result = prove_output_bias_dynamics()
+    inner_bias_result = prove_inner_bias_dynamics()
     sigma, s = sp.symbols("sigma s", real=True)
     off_target_decay = sp.simplify(mode_result["ds_balanced"].subs({sigma: 0}))
 
@@ -383,6 +454,139 @@ def main():
             "- If inputs are centered, only an independent bias-decay channel is added.\n"
             "- If inputs are not centered, bias error couples into factor learning through `e\\mu^T`, "
             "so early dynamics can differ until bias error shrinks.\n\n"
+        )
+
+        f.write("## Inner-Bias Model: $\\hat{y} = W(Ux + u) + w$\n\n")
+        f.write(
+            "Use `A=WU`, `b=Wu+w`, `E=A-A_*`, `e=b-b_*`, with population assumptions "
+            "`E[xx^T]=I`, `E[x]=\\mu`.\n\n"
+        )
+        write_equation_with_note(
+            f,
+            "g_A",
+            inner_bias_result["gA"],
+            "Matrix gradient matches the affine form: residual plus mean-coupled bias term.",
+        )
+        write_equation_with_note(
+            f,
+            "g_b",
+            inner_bias_result["gb"],
+            "Bias gradient mixes direct bias error and projected matrix error through `\\mu`.",
+        )
+        write_equation_with_note(
+            f,
+            "dW/dt",
+            inner_bias_result["dW"],
+            (
+                "Key new term vs output-bias-only: `-gb u^T`. Because `b=Wu+w`, `W` now gets a second "
+                "feedback path through inner bias `u`."
+            ),
+        )
+        write_equation_with_note(
+            f,
+            "dU/dt",
+            inner_bias_result["dU"],
+            "Same structure as before, but driven by `g_A` that already contains bias coupling.",
+        )
+        write_equation_with_note(
+            f,
+            "du/dt",
+            inner_bias_result["du"],
+            (
+                "Inner bias follows `-W^T g_b`: it is amplified/suppressed through current output "
+                "directions encoded in `W`."
+            ),
+        )
+        write_equation_with_note(
+            f,
+            "dw/dt",
+            inner_bias_result["dw"],
+            "Output bias still follows `-g_b`, but now shares responsibility for fitting `b_*` with `Wu`.",
+        )
+        write_equation_with_note(
+            f,
+            "dA/dt",
+            inner_bias_result["dA"],
+            (
+                "Compared to deep linear, there is an extra coupling term `-g_b u^T U`. "
+                "Thus inner bias can directly perturb singular-mode evolution of `A`."
+            ),
+        )
+        write_equation_with_note(
+            f,
+            "db/dt",
+            inner_bias_result["db"],
+            (
+                "Affine term dynamics are coupled through all parameters (`W,U,u,w`), so translation "
+                "fitting is no longer an independent channel."
+            ),
+        )
+
+        f.write("### Centered-input specialization (`\\mu = 0`)\n\n")
+        write_equation_with_note(
+            f,
+            "dW/dt |_{mu=0}",
+            inner_bias_result["dW_mu0"],
+            (
+                "Unlike output-bias-only, factor updates are still modified by bias error via "
+                "`-e u^T`."
+            ),
+        )
+        write_equation_with_note(
+            f,
+            "dU/dt |_{mu=0}",
+            inner_bias_result["dU_mu0"],
+            "Same as deep linear in form (`-W^T E`).",
+        )
+        write_equation_with_note(
+            f,
+            "du/dt |_{mu=0}",
+            inner_bias_result["du_mu0"],
+            "Inner bias remains coupled to current output basis (`W^T`).",
+        )
+        write_equation_with_note(
+            f,
+            "dw/dt |_{mu=0}",
+            inner_bias_result["dw_mu0"],
+            "Output bias still tracks total affine error `e`.",
+        )
+
+        f.write("### Inner-bias-only subcase (`w=0`, `\\mu=0`)\n\n")
+        write_equation_with_note(
+            f,
+            "dW/dt |_{mu=0,w=0}",
+            inner_bias_result["dW_mu0_w0"],
+            "Even without output bias, inner bias affects factor learning through `-(Wu-b_*)u^T`.",
+        )
+        write_equation_with_note(
+            f,
+            "dU/dt |_{mu=0,w=0}",
+            inner_bias_result["dU_mu0_w0"],
+            "Unchanged deep-linear-form matrix channel.",
+        )
+        write_equation_with_note(
+            f,
+            "du/dt |_{mu=0,w=0}",
+            inner_bias_result["du_mu0_w0"],
+            "Inner bias update is shaped by `W^T` and current affine mismatch.",
+        )
+
+        f.write("### Initialization cases (centered inputs, `w=0`)\n\n")
+        f.write(
+            "1. `u(0)=0`: initially the extra `-e u^T` term in `dW/dt` is zero, so the matrix channel "
+            "starts like deep linear; however `du/dt = -W^T(Wu-b_*)` is generally nonzero, so `u` turns on "
+            "and coupling appears shortly after unless `W^T b_* = 0`.\n\n"
+        )
+        f.write(
+            "2. `u(0)` random small (same scale as factor init): coupling is present from the start through "
+            "`-e u^T` and `-g_b u^T U`; this can perturb early singular-mode ordering relative to deep "
+            "linear, especially when affine target magnitude is non-negligible.\n\n"
+        )
+        f.write(
+            "**What changes vs deep linear / output-bias-only?**\n\n"
+            "- Output-bias-only adds an affine channel that can decouple when `\\mu=0`.\n"
+            "- Inner bias introduces multiplicative coupling through `Wu`, so even at `\\mu=0` the factor "
+            "dynamics are generally modified once `u` is nonzero.\n\n"
         )
 
         f.write("All symbolic checks passed.\n")
