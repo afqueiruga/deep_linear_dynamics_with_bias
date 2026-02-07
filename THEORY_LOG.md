@@ -30,3 +30,11 @@ Running notebook for symbolic/theoretical results (separate from numerical exper
 - Scope/assumptions:
   - The logistic statement is exact in the aligned, balanced reduction; outside it, mode coupling can appear.
   - The symbolic derivation still establishes the core mechanism used in low-rank implicit-bias arguments.
+
+## 2026-02-06 (target-vs-off-target clarification)
+
+- Clarification requested: does the derived law only imply slow growth, or also decay of non-target modes?
+- In the balanced aligned reduction, the mode ODE is `ds/dt = 2 s (sigma - s)`.
+- For target-aligned modes (`sigma > 0`): small `s` grows slowly at first, then accelerates, then saturates.
+- For off-target modes (`sigma = 0`): `ds/dt = -2 s^2 <= 0`, so these modes decay toward zero.
+- Interpretation: the mechanism is dual-purpose in this regime: it promotes target modes and suppresses non-target directions.

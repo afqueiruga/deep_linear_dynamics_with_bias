@@ -20,6 +20,11 @@ def md_equation(label, expr):
     return f"**{label}**\n\n{md_block_math(expr)}"
 
 
+def write_equation_with_note(f, label, expr, note):
+    f.write(md_equation(label, expr))
+    f.write(note.strip() + "\n\n")
+
+
 def prove_matrix_dynamics():
     n, r = sp.symbols("n r", integer=True, positive=True)
     W = sp.MatrixSymbol("W", n, r)
@@ -100,6 +105,8 @@ def main():
 
     matrix_result = prove_matrix_dynamics()
     mode_result = prove_mode_dynamics()
+    sigma, s = sp.symbols("sigma s", real=True)
+    off_target_decay = sp.simplify(mode_result["ds_balanced"].subs({sigma: 0}))
 
     if args.output is None:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -116,18 +123,105 @@ def main():
         f.write("$$\nL(A) = \\frac{1}{2}\\|A - A_*\\|_F^2, \\quad A = WU\n$$\n\n")
 
         f.write("## Matrix-Valued Gradient Flow\n\n")
-        f.write(md_equation("A := WU", matrix_result["A"]) + "\n")
-        f.write(md_equation("E := A - A_*", matrix_result["E"]) + "\n")
-        f.write(md_equation("dW/dt", matrix_result["dW"]) + "\n")
-        f.write(md_equation("dU/dt", matrix_result["dU"]) + "\n")
-        f.write(md_equation("dA/dt", matrix_result["dA"]) + "\n")
+        write_equation_with_note(
+            f,
+            "A := WU",
+            matrix_result["A"],
+            (
+                "Interpretation: `A` is the end-to-end linear map realized by the two factors. "
+                "Any rank structure in `A` must emerge through coupled updates of `W` and `U`."
+            ),
+        )
+        write_equation_with_note(
+            f,
+            "E := A - A_*",
+            matrix_result["E"],
+            (
+                "Interpretation: `E` is the training error operator in parameter space. "
+                "All subsequent dynamics are driven by this residual."
+            ),
+        )
+        write_equation_with_note(
+            f,
+            "dW/dt",
+            matrix_result["dW"],
+            (
+                "Interpretation: `W` is updated by right-multiplying the error with `U^T`. "
+                "Only directions represented through the current `U` receive strong updates."
+            ),
+        )
+        write_equation_with_note(
+            f,
+            "dU/dt",
+            matrix_result["dU"],
+            (
+                "Interpretation: `U` is updated by left-multiplying the error with `W^T`. "
+                "Only directions represented through the current `W` are strongly amplified."
+            ),
+        )
+        write_equation_with_note(
+            f,
+            "dA/dt",
+            matrix_result["dA"],
+            (
+                "Conclusion: end-to-end error is preconditioned by `U^T U` and `W W^T`, not by identity. "
+                "This induces anisotropic learning and favors subspaces already activated by the factors."
+            ),
+        )
 
         f.write("## Singular-Mode Dynamics (Aligned + Balanced Regime)\n\n")
-        f.write(md_equation("dw/dt", mode_result["dw"]) + "\n")
-        f.write(md_equation("du/dt", mode_result["du"]) + "\n")
-        f.write(md_equation("ds/dt", mode_result["ds"]) + "\n")
-        f.write(md_equation("Balanced law: ds/dt", mode_result["ds_balanced"]) + "\n")
+        write_equation_with_note(
+            f,
+            "dw/dt",
+            mode_result["dw"],
+            (
+                "Interpretation: each factor component grows or shrinks based on signed mismatch `(s-\\sigma)` "
+                "scaled by the other factor."
+            ),
+        )
+        write_equation_with_note(
+            f,
+            "du/dt",
+            mode_result["du"],
+            (
+                "Interpretation: the two factors are dynamically coupled; mode activation requires both "
+                "`w` and `u` to become non-negligible."
+            ),
+        )
+        write_equation_with_note(
+            f,
+            "ds/dt",
+            mode_result["ds"],
+            (
+                "Interpretation: mode speed is proportional to `(w^2+u^2)` and residual `(\\sigma-s)`. "
+                "Small factors imply slow early-time dynamics."
+            ),
+        )
+        write_equation_with_note(
+            f,
+            "Balanced law: ds/dt",
+            mode_result["ds_balanced"],
+            (
+                "Conclusion: in the balanced regime this is logistic growth for each target-aligned mode. "
+                "Tiny modes grow slowly, then accelerate, then saturate near `\\sigma`."
+            ),
+        )
+        write_equation_with_note(
+            f,
+            "Off-target case (sigma = 0)",
+            off_target_decay,
+            (
+                "Conclusion: modes outside the target subspace decay (`ds/dt=-2s^2 <= 0`) in this reduction, "
+                "so the same dynamics that slow small modes also suppress non-target modes."
+            ),
+        )
 
+        f.write("**Final takeaway**\n\n")
+        f.write(
+            "The symbolic derivation supports a low-rank inductive bias mechanism: "
+            "target-aligned modes grow with logistic-type dynamics, while off-target modes decay "
+            "in the balanced/aligned reduction.\n\n"
+        )
         f.write("All symbolic checks passed.\n")
 
     print(f"Wrote markdown proof to: {output_path}")
