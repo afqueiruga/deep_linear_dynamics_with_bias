@@ -4,6 +4,7 @@ import torch.optim as optim
 from datetime import datetime
 from pathlib import Path
 import sys
+import os
 
 try:
     import matplotlib
@@ -81,6 +82,13 @@ def slugify(text):
     while "__" in out:
         out = out.replace("__", "_")
     return out.strip("_")
+
+
+def env_flag(name, default):
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 def save_spectrum_plot(histories, save_path, title, topk=10):
     if not PLOTTING_AVAILABLE:
@@ -316,6 +324,8 @@ batch_size = n
 svd_every_epochs = 20     # compute SVD metrics only every few epochs
 rank_thresh = 1e-2
 run_experiment_1 = False  # disabled for efficiency; set True to re-enable
+run_experiment_2 = env_flag("RUN_EXPERIMENT_2", True)
+run_experiment_3 = env_flag("RUN_EXPERIMENT_3", False)
 # Label-noise options (set to >0 to enable additive Gaussian noise on Y).
 label_noise_std_exp1 = 0.0
 # Experiment-2-specific schedule to probe slow implicit regularization.
@@ -508,6 +518,7 @@ print(
 print(f"artifact_run_id={RUN_ID}")
 print(f"artifact_dir={RUN_OUTPUT_DIR}")
 print(f"artifact_log={RUN_LOG_PATH}")
+print(f"run_experiment_1={run_experiment_1}, run_experiment_2={run_experiment_2}, run_experiment_3={run_experiment_3}")
 
 if run_experiment_1:
     g_noise_exp1 = torch.Generator(device=device)
@@ -668,6 +679,10 @@ with torch.no_grad():
             A_star_learnable.norm().item(), A_star_unlearnable.norm().item()
         )
     )
+
+if not run_experiment_2:
+    print("\nExperiment 2 is disabled (run_experiment_2=False).")
+    label_noise_values_lowX = []
 
 for noise_idx, label_noise_std_lowX in enumerate(label_noise_values_lowX):
     if label_noise_std_lowX == 0.0:
@@ -964,3 +979,145 @@ for noise_idx, label_noise_std_lowX in enumerate(label_noise_values_lowX):
         print(f"[saved] exp2 spectra history: {exp2_data_path}")
         if exp2_plot_path is not None:
             print(f"[saved] exp2 spectrum plot: {exp2_plot_path}")
+
+# ----------------------------
+# Experiment 3
+# Low-X setting, balanced vs unbalanced deep initialization.
+# Goal: isolate how factor scaling affects null(X) dynamics.
+# ----------------------------
+if run_experiment_3:
+    print("\n====================")
+    print("Experiment 3: balanced vs unbalanced initialization")
+    print("====================")
+    exp3_r = 2 * d
+    exp3_noise_std = 0.0
+    exp3_epochs = 600
+    exp3_svd_every = 20
+    exp3_top_sv_every = 20
+    exp3_lr = 1e-2
+    exp3_gamma = 0.995
+    exp3_optimizer = "adam"
+    exp3_base_scale = 1e-2
+    # Keep product-scale approximately fixed while changing factor imbalance.
+    exp3_conditions = [
+        ("Deep2-Balanced", 1.0, 1.0),
+        ("Deep2-WideOuter", 10.0, 0.1),
+        ("Deep2-WideInner", 0.1, 10.0),
+    ]
+
+    Y_low_exp3 = X_low @ A_star_full.T
+    g_noise_exp3 = torch.Generator(device=device)
+    g_noise_exp3.manual_seed(4040)
+    Y_low_exp3 = add_label_noise(Y_low_exp3, exp3_noise_std, generator=g_noise_exp3)
+
+    exp3_results = {}
+    exp3_histories = {}
+    exp3_models = {}
+
+    for cond_name, w_mult, u_mult in exp3_conditions:
+        model = DeepLinear(d=d, m=m, r=exp3_r, init_scale=exp3_base_scale, device=device)
+        with torch.no_grad():
+            nn.init.normal_(model.W, mean=0.0, std=exp3_base_scale * w_mult)
+            nn.init.normal_(model.U, mean=0.0, std=exp3_base_scale * u_mult)
+        exp3_models[cond_name] = model
+        result = train_model(
+            name=f"{cond_name}(r={exp3_r})",
+            model=model,
+            get_A_fn=lambda model: model.end_to_end(),
+            X=X_low,
+            Y=Y_low_exp3,
+            A_star=A_star_full,
+            lr=exp3_lr,
+            optimizer_name=exp3_optimizer,
+            lr_decay_gamma=exp3_gamma,
+            epochs=exp3_epochs,
+            batch_size=batch_size,
+            svd_every_epochs=exp3_svd_every,
+            rank_thresh=rank_thresh,
+            device=device,
+            P_left=P_left2,
+            P_right=P_right2,
+            P_left_perp=P_left2_perp,
+            P_right_perp=P_right2_perp,
+            model_null_proj=Q_x,
+            model_null_label="model_nullX_norm",
+            top_sv_every_epochs=exp3_top_sv_every,
+            top_sv_k=top_sv_k,
+            top_sv_method=top_sv_method_lowX,
+            seed=321,
+        )
+        exp3_results[cond_name] = result
+        exp3_histories[cond_name] = {
+            "epochs": result["sv_history_epochs"],
+            "sv": result["sv_history"],
+        }
+
+    shallow_exp3 = nn.Linear(d, m, bias=False, device=device)
+    with torch.no_grad():
+        nn.init.normal_(shallow_exp3.weight, mean=0.0, std=exp3_base_scale)
+    shallow_exp3_result = train_model(
+        name="Shallow-Ref",
+        model=shallow_exp3,
+        get_A_fn=lambda model: model.weight,
+        X=X_low,
+        Y=Y_low_exp3,
+        A_star=A_star_full,
+        lr=exp3_lr,
+        optimizer_name=exp3_optimizer,
+        lr_decay_gamma=exp3_gamma,
+        epochs=exp3_epochs,
+        batch_size=batch_size,
+        svd_every_epochs=exp3_svd_every,
+        rank_thresh=rank_thresh,
+        device=device,
+        P_left=P_left2,
+        P_right=P_right2,
+        P_left_perp=P_left2_perp,
+        P_right_perp=P_right2_perp,
+        model_null_proj=Q_x,
+        model_null_label="model_nullX_norm",
+        top_sv_every_epochs=exp3_top_sv_every,
+        top_sv_k=top_sv_k,
+        top_sv_method=top_sv_method_lowX,
+        seed=654,
+    )
+    exp3_results["Shallow-Ref"] = shallow_exp3_result
+    exp3_histories["Shallow-Ref"] = {
+        "epochs": shallow_exp3_result["sv_history_epochs"],
+        "sv": shallow_exp3_result["sv_history"],
+    }
+
+    print("\n[Experiment 3 final decomposition]")
+    for cond_name, _, _ in exp3_conditions:
+        A_hat = exp3_models[cond_name].end_to_end()
+        support_fit_err = ((A_hat - A_star_full) @ P_x).norm().item()
+        learnable_target_err = (A_hat @ P_x - A_star_learnable).norm().item()
+        model_nullX_norm = (A_hat @ Q_x).norm().item()
+        print(
+            "{} support_fit_err={:.3e} learnable_target_err={:.3e} model_nullX_norm={:.3e}".format(
+                cond_name, support_fit_err, learnable_target_err, model_nullX_norm
+            )
+        )
+    A_hat_shallow = shallow_exp3.weight
+    print(
+        "Shallow-Ref support_fit_err={:.3e} learnable_target_err={:.3e} model_nullX_norm={:.3e}".format(
+            ((A_hat_shallow - A_star_full) @ P_x).norm().item(),
+            (A_hat_shallow @ P_x - A_star_learnable).norm().item(),
+            (A_hat_shallow @ Q_x).norm().item(),
+        )
+    )
+
+    exp3_tag = slugify("exp3_balanced_vs_unbalanced")
+    exp3_data_path = RUN_OUTPUT_DIR / f"{exp3_tag}_singular_value_history.pt"
+    torch.save(exp3_histories, exp3_data_path)
+    exp3_plot_path = save_spectrum_plot(
+        histories=exp3_histories,
+        save_path=RUN_OUTPUT_DIR / f"{exp3_tag}_singular_value_evolution.png",
+        title="Experiment 3: Singular Value Evolution (balanced vs unbalanced init)",
+        topk=top_sv_k,
+    )
+    print(f"[saved] exp3 spectra history: {exp3_data_path}")
+    if exp3_plot_path is not None:
+        print(f"[saved] exp3 spectrum plot: {exp3_plot_path}")
+else:
+    print("\nExperiment 3 is disabled (run_experiment_3=False).")

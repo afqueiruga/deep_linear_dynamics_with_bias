@@ -686,3 +686,75 @@ Interpretation: observed metrics are internally consistent; no implementation bu
 
 - Smoke run (`outputs/run_20260208_012845/`) confirms singular-value history and multipanel spectrum plots are being written correctly.
 - This enables direct visual validation of mode-wise growth/plateau behavior in future full runs.
+
+## New Experiment Design + Executed Ablation (2026-02-08)
+
+### Proposed next experiments (designed)
+
+1. **Balancedness ablation (executed below)**  
+Keep data/task fixed (Experiment 2 setting), vary only per-factor initialization scales while keeping approximate product scale fixed.  
+Goal: test whether factor imbalance alone changes nullspace selection.
+
+2. **Optimizer geometry ablation**  
+Repeat the same balanced/unbalanced setup with SGD vs Adam (same LR schedule normalized for effective step size).  
+Goal: test whether nullspace selection is optimizer-dependent.
+
+3. **Deep3 stabilization ablation**  
+For 3-layer models, add mild per-layer weight decay and compare against no decay.  
+Goal: test if Deep3 nullspace inflation can be reduced without hurting support fit.
+
+### Executed: Experiment 3 (balanced vs unbalanced init)
+
+- Run ID: `outputs/run_20260208_115050/`
+- Script invocation:
+  - `RUN_EXPERIMENT_2=0 RUN_EXPERIMENT_3=1 python3.11 script.py`
+- Setting:
+  - Same low-rank-input identifiability setup as Experiment 2 (`A*` full-rank, `X` low-rank).
+  - Deep model: 2-layer, `r=100`, `epochs=600`, Adam, `lr=1e-2`, decay `0.995`.
+  - Conditions:
+    - `Deep2-Balanced`: `(std_W, std_U) = (1e-2, 1e-2)`
+    - `Deep2-WideOuter`: `(1e-1, 1e-3)`
+    - `Deep2-WideInner`: `(1e-3, 1e-1)`
+  - Reference baseline: `Shallow-Ref`.
+
+### Final quantitative outcomes
+
+- `Deep2-Balanced`
+  - `support_fit_err=4.761e-14`
+  - `learnable_target_err=4.766e-14`
+  - `model_nullX_norm=2.683e+00`
+- `Deep2-WideOuter`
+  - `support_fit_err=4.938e-14`
+  - `learnable_target_err=4.949e-14`
+  - `model_nullX_norm=3.012e+00`
+- `Deep2-WideInner`
+  - `support_fit_err=5.085e-14`
+  - `learnable_target_err=5.094e-14`
+  - `model_nullX_norm=3.305e+00`
+- `Shallow-Ref`
+  - `support_fit_err=2.258e-12`
+  - `learnable_target_err=2.258e-12`
+  - `model_nullX_norm=5.048e+00`
+
+Artifacts:
+- Log: `outputs/run_20260208_115050/script_20260208_115050.log`
+- Singular-value history: `outputs/run_20260208_115050/exp3_balanced_vs_unbalanced_singular_value_history.pt`
+- Plot: `outputs/run_20260208_115050/exp3_balanced_vs_unbalanced_singular_value_evolution.png`
+
+### Observations and interpretation
+
+1. All deep conditions solved the learnable component to numerical precision.  
+Support-fit errors are all `~5e-14`, so optimization success on the identifiable subspace is not the discriminant.
+
+2. Initialization balancedness changes nullspace bias even when training loss is effectively zero.  
+`model_nullX_norm` is strictly ordered:
+`Balanced (2.683) < WideOuter (3.012) < WideInner (3.305) << Shallow (5.048)`.
+
+3. This supports a stronger claim: implicit bias in deep linear models is not only architecture-level, but parameterization-trajectory-level.  
+Different factorizations that can all interpolate the data pick measurably different nullspace solutions.
+
+4. The result is consistent with deep linear dynamics literature emphasizing path geometry and scale coupling, not just representational capacity.  
+The low-rank/low-complexity tendency appears strongest with more balanced factors.
+
+5. Caution: this is one width (`r=100`) and one optimizer (Adam).  
+The direction is clear, but generalization requires the designed follow-ups above.
