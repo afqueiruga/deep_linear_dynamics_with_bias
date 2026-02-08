@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 from datetime import datetime
 from pathlib import Path
+import sys
 
 try:
     import matplotlib
@@ -46,11 +47,28 @@ def format_top_svs(sv, k=10):
 def make_run_output_dirs(base_dir="outputs"):
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = Path(base_dir) / f"run_{run_id}"
-    plot_dir = run_dir / "plots"
-    data_dir = run_dir / "data"
-    plot_dir.mkdir(parents=True, exist_ok=True)
-    data_dir.mkdir(parents=True, exist_ok=True)
-    return run_id, run_dir, plot_dir, data_dir
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_id, run_dir
+
+class StreamTee:
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, data):
+        for stream in self.streams:
+            stream.write(data)
+        return len(data)
+
+    def flush(self):
+        for stream in self.streams:
+            stream.flush()
+
+def setup_run_logging(run_dir, run_id):
+    log_path = Path(run_dir) / f"script_{run_id}.log"
+    log_f = open(log_path, "w", buffering=1, encoding="utf-8")
+    sys.stdout = StreamTee(sys.__stdout__, log_f)
+    sys.stderr = StreamTee(sys.__stderr__, log_f)
+    return log_path
 
 def slugify(text):
     chars = []
@@ -321,7 +339,8 @@ shallow_lr_lowX_no_noise = 1e-2
 shallow_lr_decay_gamma_lowX_no_noise = 1.0
 # Fixed projectors from A* used to track how training error moves across subspaces.
 P_left, P_right, P_left_perp, P_right_perp = make_error_projectors(A_star, k)
-RUN_ID, RUN_OUTPUT_DIR, RUN_PLOT_DIR, RUN_DATA_DIR = make_run_output_dirs(base_dir="outputs")
+RUN_ID, RUN_OUTPUT_DIR = make_run_output_dirs(base_dir="outputs")
+RUN_LOG_PATH = setup_run_logging(RUN_OUTPUT_DIR, RUN_ID)
 
 def train_model(
     name,
@@ -488,6 +507,7 @@ print(
 )
 print(f"artifact_run_id={RUN_ID}")
 print(f"artifact_dir={RUN_OUTPUT_DIR}")
+print(f"artifact_log={RUN_LOG_PATH}")
 
 if run_experiment_1:
     g_noise_exp1 = torch.Generator(device=device)
@@ -575,11 +595,11 @@ if run_experiment_1:
         "epochs": ms["sv_history_epochs"],
         "sv": ms["sv_history"],
     }
-    exp1_data_path = RUN_DATA_DIR / "exp1_singular_value_history.pt"
+    exp1_data_path = RUN_OUTPUT_DIR / "exp1_singular_value_history.pt"
     torch.save(exp1_histories, exp1_data_path)
     exp1_plot_path = save_spectrum_plot(
         histories=exp1_histories,
-        save_path=RUN_PLOT_DIR / "exp1_singular_value_evolution.png",
+        save_path=RUN_OUTPUT_DIR / "exp1_singular_value_evolution.png",
         title="Experiment 1: Singular Value Evolution",
         topk=top_sv_k,
     )
@@ -933,11 +953,11 @@ for noise_idx, label_noise_std_lowX in enumerate(label_noise_values_lowX):
         }
 
         exp2_tag = slugify(f"exp2_noise_{label_noise_std_lowX:.3e}_init_{init_scale:.3e}")
-        exp2_data_path = RUN_DATA_DIR / f"{exp2_tag}_singular_value_history.pt"
+        exp2_data_path = RUN_OUTPUT_DIR / f"{exp2_tag}_singular_value_history.pt"
         torch.save(exp2_histories, exp2_data_path)
         exp2_plot_path = save_spectrum_plot(
             histories=exp2_histories,
-            save_path=RUN_PLOT_DIR / f"{exp2_tag}_singular_value_evolution.png",
+            save_path=RUN_OUTPUT_DIR / f"{exp2_tag}_singular_value_evolution.png",
             title=f"Experiment 2: Singular Value Evolution (noise={label_noise_std_lowX:.3e}, init={init_scale:.3e})",
             topk=top_sv_k,
         )

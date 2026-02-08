@@ -585,3 +585,11 @@ At moderate widths (`r=50,100`) the same pattern holds: all three deep-2 familie
   - `outputs/run_<timestamp>/data/*_singular_value_history.pt`
 - For Experiment 2, one figure is saved per `(noise, init_scale)` block; each figure contains all model variants in that block (`Deep2`, `Deep3`, `Deep2OB`, `Deep2IOB`, `Shallow`).
 - The script prints `artifact_dir` at startup and prints each saved plot/data path after writing.
+
+### Minor output-layout update
+- Flattened run artifacts to a single directory per run (no `data/` and `plots/` subfolders).
+- New layout:
+  - `outputs/run_<timestamp>/*.png`
+  - `outputs/run_<timestamp>/*_singular_value_history.pt`
+  - `outputs/run_<timestamp>/script_<timestamp>.log`
+- Added internal tee logging in `script.py` so each run automatically writes its full console output to the run directory log file while still printing to terminal.
