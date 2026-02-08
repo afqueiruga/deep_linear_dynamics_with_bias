@@ -147,6 +147,35 @@ class DeepLinear3(nn.Module):
     def forward(self, x):
         return x @ self.end_to_end().T
 
+class DeepLinearOuterBias(nn.Module):
+    # y = W U x + w
+    def __init__(self, d, m, r, init_scale=0.01, device="cpu"):
+        super().__init__()
+        self.W = nn.Parameter(init_scale * torch.randn(m, r, device=device))
+        self.U = nn.Parameter(init_scale * torch.randn(r, d, device=device))
+        self.w = nn.Parameter(torch.zeros(m, device=device))
+
+    def end_to_end(self):
+        return self.W @ self.U
+
+    def forward(self, x):
+        return x @ self.end_to_end().T + self.w
+
+class DeepLinearInnerOuterBias(nn.Module):
+    # y = W (U x + u) + w
+    def __init__(self, d, m, r, init_scale=0.01, device="cpu"):
+        super().__init__()
+        self.W = nn.Parameter(init_scale * torch.randn(m, r, device=device))
+        self.U = nn.Parameter(init_scale * torch.randn(r, d, device=device))
+        self.u = nn.Parameter(torch.zeros(r, device=device))
+        self.w = nn.Parameter(torch.zeros(m, device=device))
+
+    def end_to_end(self):
+        return self.W @ self.U
+
+    def forward(self, x):
+        return x @ self.end_to_end().T + (self.W @ self.u) + self.w
+
 # ----------------------------
 # Experiment
 # ----------------------------
@@ -535,14 +564,22 @@ for noise_idx, label_noise_std_lowX in enumerate(label_noise_values_lowX):
         print(f"\n++++ init_scale={init_scale:.3e} ++++")
         deep2_results_lowX = {}
         deep3_results_lowX = {}
+        deep2b_results_lowX = {}
+        deep2ib_results_lowX = {}
         deep2_models_lowX = {}
         deep3_models_lowX = {}
+        deep2b_models_lowX = {}
+        deep2ib_models_lowX = {}
         for r in deep_widths:
             deep2_model = DeepLinear(d=d, m=m, r=r, init_scale=init_scale, device=device)
             deep3_model = DeepLinear3(d=d, m=m, r=r, init_scale=init_scale, device=device)
+            deep2b_model = DeepLinearOuterBias(d=d, m=m, r=r, init_scale=init_scale, device=device)
+            deep2ib_model = DeepLinearInnerOuterBias(d=d, m=m, r=r, init_scale=init_scale, device=device)
 
             deep2_models_lowX[r] = deep2_model
             deep3_models_lowX[r] = deep3_model
+            deep2b_models_lowX[r] = deep2b_model
+            deep2ib_models_lowX[r] = deep2ib_model
 
             deep2_results_lowX[r] = train_model(
                 name=f"LowX-Deep2(r={r},s={init_scale:.0e})",
@@ -573,6 +610,58 @@ for noise_idx, label_noise_std_lowX in enumerate(label_noise_values_lowX):
             deep3_results_lowX[r] = train_model(
                 name=f"LowX-Deep3(r={r},s={init_scale:.0e})",
                 model=deep3_model,
+                get_A_fn=lambda model: model.end_to_end(),
+                X=X_low,
+                Y=Y_low,
+                A_star=A_star_full,
+                lr=deep_lr_run,
+                optimizer_name=deep_optimizer_name,
+                lr_decay_gamma=deep_gamma_run,
+                epochs=epochs_run,
+                batch_size=batch_size,
+                svd_every_epochs=svd_every_run,
+                rank_thresh=rank_thresh,
+                device=device,
+                P_left=P_left2,
+                P_right=P_right2,
+                P_left_perp=P_left2_perp,
+                P_right_perp=P_right2_perp,
+                model_null_proj=Q_x,
+                model_null_label="model_nullX_norm",
+                top_sv_every_epochs=top_sv_every_run,
+                top_sv_k=top_sv_k,
+                top_sv_method=top_sv_method_lowX,
+            )
+
+            deep2b_results_lowX[r] = train_model(
+                name=f"LowX-Deep2OB(r={r},s={init_scale:.0e})",
+                model=deep2b_model,
+                get_A_fn=lambda model: model.end_to_end(),
+                X=X_low,
+                Y=Y_low,
+                A_star=A_star_full,
+                lr=deep_lr_run,
+                optimizer_name=deep_optimizer_name,
+                lr_decay_gamma=deep_gamma_run,
+                epochs=epochs_run,
+                batch_size=batch_size,
+                svd_every_epochs=svd_every_run,
+                rank_thresh=rank_thresh,
+                device=device,
+                P_left=P_left2,
+                P_right=P_right2,
+                P_left_perp=P_left2_perp,
+                P_right_perp=P_right2_perp,
+                model_null_proj=Q_x,
+                model_null_label="model_nullX_norm",
+                top_sv_every_epochs=top_sv_every_run,
+                top_sv_k=top_sv_k,
+                top_sv_method=top_sv_method_lowX,
+            )
+
+            deep2ib_results_lowX[r] = train_model(
+                name=f"LowX-Deep2IOB(r={r},s={init_scale:.0e})",
+                model=deep2ib_model,
                 get_A_fn=lambda model: model.end_to_end(),
                 X=X_low,
                 Y=Y_low,
@@ -633,6 +722,10 @@ for noise_idx, label_noise_std_lowX in enumerate(label_noise_values_lowX):
             print(f"LowX-Deep2(r={r},s={init_scale:.0e}):", format_top_svs(deep2_results_lowX[r]["top_sv"], k=10))
         for r in deep_widths:
             print(f"LowX-Deep3(r={r},s={init_scale:.0e}):", format_top_svs(deep3_results_lowX[r]["top_sv"], k=10))
+        for r in deep_widths:
+            print(f"LowX-Deep2OB(r={r},s={init_scale:.0e}):", format_top_svs(deep2b_results_lowX[r]["top_sv"], k=10))
+        for r in deep_widths:
+            print(f"LowX-Deep2IOB(r={r},s={init_scale:.0e}):", format_top_svs(deep2ib_results_lowX[r]["top_sv"], k=10))
         print(f"LowX-Shallow(s={init_scale:.0e}):", format_top_svs(ms_lowX["top_sv"], k=10))
 
         print(f"\n[Experiment 2 identifiable vs null(X) decomposition | noise={label_noise_std_lowX}, init_scale={init_scale:.3e}]")
@@ -655,6 +748,28 @@ for noise_idx, label_noise_std_lowX in enumerate(label_noise_values_lowX):
             target_nullX_norm = A_star_unlearnable.norm().item()
             print(
                 "LowX-Deep3(r={},s={:.0e}) support_fit_err={:.3e} learnable_target_err={:.3e} model_nullX_norm={:.3e} target_nullX_norm={:.3e}".format(
+                    r, init_scale, support_fit_err, learnable_target_err, model_nullX_norm, target_nullX_norm
+                )
+            )
+        for r in deep_widths:
+            A_hat = deep2b_models_lowX[r].end_to_end()
+            support_fit_err = ((A_hat - A_star_full) @ P_x).norm().item()
+            learnable_target_err = (A_hat @ P_x - A_star_learnable).norm().item()
+            model_nullX_norm = (A_hat @ Q_x).norm().item()
+            target_nullX_norm = A_star_unlearnable.norm().item()
+            print(
+                "LowX-Deep2OB(r={},s={:.0e}) support_fit_err={:.3e} learnable_target_err={:.3e} model_nullX_norm={:.3e} target_nullX_norm={:.3e}".format(
+                    r, init_scale, support_fit_err, learnable_target_err, model_nullX_norm, target_nullX_norm
+                )
+            )
+        for r in deep_widths:
+            A_hat = deep2ib_models_lowX[r].end_to_end()
+            support_fit_err = ((A_hat - A_star_full) @ P_x).norm().item()
+            learnable_target_err = (A_hat @ P_x - A_star_learnable).norm().item()
+            model_nullX_norm = (A_hat @ Q_x).norm().item()
+            target_nullX_norm = A_star_unlearnable.norm().item()
+            print(
+                "LowX-Deep2IOB(r={},s={:.0e}) support_fit_err={:.3e} learnable_target_err={:.3e} model_nullX_norm={:.3e} target_nullX_norm={:.3e}".format(
                     r, init_scale, support_fit_err, learnable_target_err, model_nullX_norm, target_nullX_norm
                 )
             )

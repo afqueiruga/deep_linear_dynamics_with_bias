@@ -538,3 +538,40 @@ Purpose:
 - Initialization scale changes the regime, but in this setup it does **not** induce nullspace decay for the problematic `Deep3(r=500)` case; it mainly changes the plateau level after rapid growth.
 - The “low-rank implicit bias” appears robust for `Deep2`, while `Deep3` at large width is prone to high-norm nullspace solutions across scales.
 - The most promising region for controlled nullspace behavior here is moderate width/depth combinations (e.g., `Deep2` and `Deep3` with `r=50/100`) rather than very wide `Deep3`.
+
+### Update: added biased deep-linear variants (Deep2OB, Deep2IOB)
+
+Implemented and ran two additional model families in Experiment 2:
+- `LowX-Deep2OB`: outer bias only, `y = W(Ux) + w`
+- `LowX-Deep2IOB`: inner+outer bias, `y = W(Ux + u) + w`
+
+Run artifact:
+- `outputs/script_20260207_191422.log`
+
+Status:
+- Completed summary/decomposition blocks for `init_scale=1e-3` and `init_scale=1e-2`.
+- `init_scale=5e-2` run was partially recorded before interruption (log ends mid-block), so conclusions below are based on the two completed scales plus consistent partial trends at `5e-2`.
+
+#### Main quantitative comparison (completed scales)
+`init_scale=1e-3` (final decomposition):
+- `Deep2(r=500)`: `support_fit_err=3.756e-14`, `model_nullX_norm=2.706`
+- `Deep2OB(r=500)`: `support_fit_err=5.252e-14`, `model_nullX_norm=2.748`
+- `Deep2IOB(r=500)`: `support_fit_err=2.897e-14`, `model_nullX_norm=2.815`
+- `Shallow`: `support_fit_err=4.158e-04`, `model_nullX_norm=5.036`
+
+`init_scale=1e-2` (final decomposition):
+- `Deep2(r=500)`: `support_fit_err=2.020e-14`, `model_nullX_norm=2.613`
+- `Deep2OB(r=500)`: `support_fit_err=1.916e-14`, `model_nullX_norm=2.541`
+- `Deep2IOB(r=500)`: `support_fit_err=1.899e-14`, `model_nullX_norm=2.487`
+- `Shallow`: `support_fit_err=5.927e-08`, `model_nullX_norm=5.056`
+
+At moderate widths (`r=50,100`) the same pattern holds: all three deep-2 families fit support essentially perfectly (`~1e-12` to `1e-13`) while keeping `model_nullX_norm` around `~2.7-2.9`, much lower than shallow (`~5.0`).
+
+#### Interpretation
+- Adding output bias and input+output bias **does not destroy** the favorable implicit bias seen in 2-layer deep linear models in this setup.
+- Across completed runs, `Deep2OB` and `Deep2IOB` are at least competitive with unbiased `Deep2` on learnable support fit, and often slightly better on `model_nullX_norm` at larger width.
+- Relative to shallow linear, all deep-2 variants still produce much smaller learned nullspace mass (`||A_hat Q_x||_F`), consistent with the original low-complexity/implicit-regularization hypothesis in this partially identifiable regime.
+- Bias terms therefore look like a quantitative perturbation of the same qualitative behavior, not a qualitative regime change.
+
+#### Caveat
+- The `init_scale=5e-2` block in this run is incomplete. Partial rows are directionally consistent with the above (deep-2 variants remain close to each other and below shallow on nullspace norm), but this should be rerun to obtain full final summary lines for that scale.
