@@ -1,6 +1,17 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from datetime import datetime
+from pathlib import Path
+
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    PLOTTING_AVAILABLE = True
+except Exception as plotting_import_error:
+    PLOTTING_AVAILABLE = False
+    PLOTTING_IMPORT_ERROR = str(plotting_import_error)
 
 torch.set_default_dtype(torch.float64)
 
@@ -31,6 +42,81 @@ def add_label_noise(Y, noise_std, generator=None):
 def format_top_svs(sv, k=10):
     vals = sv[:k].tolist()
     return "[" + ", ".join(f"{v:.3e}" for v in vals) + "]"
+
+def make_run_output_dirs(base_dir="outputs"):
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = Path(base_dir) / f"run_{run_id}"
+    plot_dir = run_dir / "plots"
+    data_dir = run_dir / "data"
+    plot_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return run_id, run_dir, plot_dir, data_dir
+
+def slugify(text):
+    chars = []
+    for ch in text:
+        if ch.isalnum():
+            chars.append(ch.lower())
+        else:
+            chars.append("_")
+    out = "".join(chars)
+    while "__" in out:
+        out = out.replace("__", "_")
+    return out.strip("_")
+
+def save_spectrum_plot(histories, save_path, title, topk=10):
+    if not PLOTTING_AVAILABLE:
+        print(f"[plotting skipped] matplotlib unavailable: {PLOTTING_IMPORT_ERROR}")
+        return None
+    if not histories:
+        return None
+
+    names = list(histories.keys())
+    n = len(names)
+    ncols = 3 if n > 4 else 2
+    nrows = (n + ncols - 1) // ncols
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(5.4 * ncols, 3.2 * nrows),
+        squeeze=False,
+    )
+
+    for idx, name in enumerate(names):
+        row, col = divmod(idx, ncols)
+        ax = axes[row][col]
+        hist = histories[name]
+        epochs = hist["epochs"]
+        sv_history = hist["sv"]
+        if not epochs or not sv_history:
+            ax.set_title(name)
+            ax.text(0.5, 0.5, "no data", ha="center", va="center")
+            continue
+
+        num_sv = min(topk, len(sv_history[0]))
+        for j in range(num_sv):
+            ys = [max(float(step_sv[j]), 1e-16) for step_sv in sv_history]
+            label = f"s{j+1}" if j <= 2 else None
+            ax.plot(epochs, ys, linewidth=1.0, label=label)
+        ax.set_yscale("log")
+        ax.set_title(name, fontsize=9)
+        ax.set_xlabel("epoch")
+        ax.set_ylabel("singular value")
+        ax.grid(alpha=0.25)
+        if idx == 0:
+            ax.legend(fontsize=8, loc="best")
+
+    for idx in range(n, nrows * ncols):
+        row, col = divmod(idx, ncols)
+        axes[row][col].axis("off")
+
+    fig.suptitle(title, fontsize=12)
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.96))
+    save_path = Path(save_path)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(save_path, dpi=180)
+    plt.close(fig)
+    return str(save_path)
 
 def effective_rank(s, eps=1e-12):
     p = s / (s.sum() + eps)
@@ -235,6 +321,7 @@ shallow_lr_lowX_no_noise = 1e-2
 shallow_lr_decay_gamma_lowX_no_noise = 1.0
 # Fixed projectors from A* used to track how training error moves across subspaces.
 P_left, P_right, P_left_perp, P_right_perp = make_error_projectors(A_star, k)
+RUN_ID, RUN_OUTPUT_DIR, RUN_PLOT_DIR, RUN_DATA_DIR = make_run_output_dirs(base_dir="outputs")
 
 def train_model(
     name,
@@ -272,6 +359,8 @@ def train_model(
     loss_fn = nn.MSELoss()
     g = torch.Generator(device=device)
     g.manual_seed(seed)
+    sv_history_epochs = []
+    sv_history = []
 
     with torch.no_grad():
         A0 = get_A_fn(model)
@@ -294,6 +383,8 @@ def train_model(
             sv0 = torch.sort(s_lr0, descending=True).values[:top_sv_k]
         else:
             raise ValueError(f"Unknown top_sv_method={top_sv_method}")
+        sv_history_epochs.append(0)
+        sv_history.append(sv0.detach().cpu().tolist())
 
     header = (
         "model          | epoch | loss      | lr        | rel_err   | fro       | nuc       | spec      | "
@@ -347,17 +438,19 @@ def train_model(
                 )
                 if model_null_proj is not None:
                     m[model_null_label] = (A_cur @ model_null_proj).norm().item()
+                if top_sv_method == "exact":
+                    sv_top = torch.sort(torch.linalg.svdvals(A_cur), descending=True).values[:top_sv_k]
+                elif top_sv_method == "lowrank":
+                    q = min(max(top_sv_k + 5, top_sv_k), min(A_cur.shape))
+                    _, s_lr, _ = torch.svd_lowrank(A_cur, q=q, niter=2)
+                    sv_top = torch.sort(s_lr, descending=True).values[:top_sv_k]
+                else:
+                    raise ValueError(f"Unknown top_sv_method={top_sv_method}")
+                sv_history_epochs.append(epoch)
+                sv_history.append(sv_top.detach().cpu().tolist())
                 print_top_sv = top_sv_every_epochs is None or epoch % top_sv_every_epochs == 0 or epoch == 1 or epoch == epochs
                 sv_str = "-"
                 if print_top_sv:
-                    if top_sv_method == "exact":
-                        sv_top = torch.sort(torch.linalg.svdvals(A_cur), descending=True).values[:top_sv_k]
-                    elif top_sv_method == "lowrank":
-                        q = min(max(top_sv_k + 5, top_sv_k), min(A_cur.shape))
-                        _, s_lr, _ = torch.svd_lowrank(A_cur, q=q, niter=2)
-                        sv_top = torch.sort(s_lr, descending=True).values[:top_sv_k]
-                    else:
-                        raise ValueError(f"Unknown top_sv_method={top_sv_method}")
                     sv_str = format_top_svs(sv_top, k=top_sv_k)
             row = (
                 f"{name:14s} | {epoch:5d} | {avg_loss:9.3e} | {scheduler.get_last_lr()[0]:9.3e} | {m['rel_err']:9.3e} | {m['fro']:9.3e} | "
@@ -371,7 +464,7 @@ def train_model(
             print(row)
 
     with torch.no_grad():
-        return summarize_A(
+        out = summarize_A(
             get_A_fn(model),
             A_star,
             thresh=rank_thresh,
@@ -381,6 +474,9 @@ def train_model(
             P_left_perp=P_left_perp,
             P_right_perp=P_right_perp,
         )
+        out["sv_history_epochs"] = sv_history_epochs
+        out["sv_history"] = sv_history
+        return out
 
 print(
     f"device={device}, n={n}, d={d}, m={m}, true rank k={k}, deep_widths={deep_widths}, "
@@ -390,6 +486,8 @@ print(
     f"shallow_decay_gamma={shallow_lr_decay_gamma}, "
     f"epochs={epochs}, batch_size={batch_size}"
 )
+print(f"artifact_run_id={RUN_ID}")
+print(f"artifact_dir={RUN_OUTPUT_DIR}")
 
 if run_experiment_1:
     g_noise_exp1 = torch.Generator(device=device)
@@ -465,6 +563,29 @@ if run_experiment_1:
             ms["err_support"], ms["err_outside"], ms["err_null"], ms["err_mixed"]
         )
     )
+
+    exp1_histories = {}
+    for r in deep_widths:
+        key = f"Deep(r={r})"
+        exp1_histories[key] = {
+            "epochs": deep_results[r]["sv_history_epochs"],
+            "sv": deep_results[r]["sv_history"],
+        }
+    exp1_histories["Shallow"] = {
+        "epochs": ms["sv_history_epochs"],
+        "sv": ms["sv_history"],
+    }
+    exp1_data_path = RUN_DATA_DIR / "exp1_singular_value_history.pt"
+    torch.save(exp1_histories, exp1_data_path)
+    exp1_plot_path = save_spectrum_plot(
+        histories=exp1_histories,
+        save_path=RUN_PLOT_DIR / "exp1_singular_value_evolution.png",
+        title="Experiment 1: Singular Value Evolution",
+        topk=top_sv_k,
+    )
+    print(f"[saved] exp1 spectra history: {exp1_data_path}")
+    if exp1_plot_path is not None:
+        print(f"[saved] exp1 spectrum plot: {exp1_plot_path}")
 else:
     print("\nExperiment 1 is disabled for efficiency (run_experiment_1=False).")
 
@@ -784,3 +905,42 @@ for noise_idx, label_noise_std_lowX in enumerate(label_noise_values_lowX):
                 init_scale, support_fit_err_shallow, learnable_target_err_shallow, model_nullX_norm_shallow, target_nullX_norm_shallow
             )
         )
+
+        exp2_histories = {}
+        for r in deep_widths:
+            exp2_histories[f"Deep2(r={r})"] = {
+                "epochs": deep2_results_lowX[r]["sv_history_epochs"],
+                "sv": deep2_results_lowX[r]["sv_history"],
+            }
+        for r in deep_widths:
+            exp2_histories[f"Deep3(r={r})"] = {
+                "epochs": deep3_results_lowX[r]["sv_history_epochs"],
+                "sv": deep3_results_lowX[r]["sv_history"],
+            }
+        for r in deep_widths:
+            exp2_histories[f"Deep2OB(r={r})"] = {
+                "epochs": deep2b_results_lowX[r]["sv_history_epochs"],
+                "sv": deep2b_results_lowX[r]["sv_history"],
+            }
+        for r in deep_widths:
+            exp2_histories[f"Deep2IOB(r={r})"] = {
+                "epochs": deep2ib_results_lowX[r]["sv_history_epochs"],
+                "sv": deep2ib_results_lowX[r]["sv_history"],
+            }
+        exp2_histories["Shallow"] = {
+            "epochs": ms_lowX["sv_history_epochs"],
+            "sv": ms_lowX["sv_history"],
+        }
+
+        exp2_tag = slugify(f"exp2_noise_{label_noise_std_lowX:.3e}_init_{init_scale:.3e}")
+        exp2_data_path = RUN_DATA_DIR / f"{exp2_tag}_singular_value_history.pt"
+        torch.save(exp2_histories, exp2_data_path)
+        exp2_plot_path = save_spectrum_plot(
+            histories=exp2_histories,
+            save_path=RUN_PLOT_DIR / f"{exp2_tag}_singular_value_evolution.png",
+            title=f"Experiment 2: Singular Value Evolution (noise={label_noise_std_lowX:.3e}, init={init_scale:.3e})",
+            topk=top_sv_k,
+        )
+        print(f"[saved] exp2 spectra history: {exp2_data_path}")
+        if exp2_plot_path is not None:
+            print(f"[saved] exp2 spectrum plot: {exp2_plot_path}")

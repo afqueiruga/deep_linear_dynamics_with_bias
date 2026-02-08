@@ -575,3 +575,13 @@ At moderate widths (`r=50,100`) the same pattern holds: all three deep-2 familie
 
 #### Caveat
 - The `init_scale=5e-2` block in this run is incomplete. Partial rows are directionally consistent with the above (deep-2 variants remain close to each other and below shallow on nullspace norm), but this should be rerun to obtain full final summary lines for that scale.
+
+### Update: singular-value evolution plotting added
+- Added plotting support to `script.py` to visualize singular-value trajectories over training.
+- `train_model(...)` now stores singular-value history at each metric checkpoint (`sv_history_epochs`, `sv_history`).
+- Added a multi-subplot plotting function that places one model per subplot and draws the top singular values over epoch on a log-y scale.
+- Added timestamped artifact organization per run:
+  - `outputs/run_<timestamp>/plots/*.png`
+  - `outputs/run_<timestamp>/data/*_singular_value_history.pt`
+- For Experiment 2, one figure is saved per `(noise, init_scale)` block; each figure contains all model variants in that block (`Deep2`, `Deep3`, `Deep2OB`, `Deep2IOB`, `Shallow`).
+- The script prints `artifact_dir` at startup and prints each saved plot/data path after writing.
