@@ -593,3 +593,96 @@ At moderate widths (`r=50,100`) the same pattern holds: all three deep-2 familie
   - `outputs/run_<timestamp>/*_singular_value_history.pt`
   - `outputs/run_<timestamp>/script_<timestamp>.log`
 - Added internal tee logging in `script.py` so each run automatically writes its full console output to the run directory log file while still printing to terminal.
+
+## Consolidated Findings Across Outputs (Deeper Synthesis)
+
+This section consolidates evidence from:
+- `outputs/script_20260207_181928.log` (complete init-scale sweep for Experiment 2 without bias variants)
+- `outputs/script_20260207_191422.log` (adds `Deep2OB` / `Deep2IOB`, complete for `init_scale={1e-3,1e-2}`)
+- `outputs/script_20260206_135825.log` (older baseline run; same qualitative pattern for Experiment 2)
+- `outputs/run_20260208_012845/*` (smoke verification of new plotting artifacts)
+
+### Literature-Grounded Hypotheses (pre-registered style)
+
+H1. **Implicit low-complexity bias from factorization**  
+Deep linear parameterization (product of matrices) with small init should prefer lower-complexity interpolants than shallow linear, especially in underdetermined settings.
+
+H2. **Support-first learning in identifiable subspaces**  
+With low-rank `X`, learnable component is `A*P_x`; good training dynamics should drive `support_fit_err = ||(A_hat - A*)P_x||_F` near zero.
+
+H3. **Nullspace suppression under implicit bias**  
+Among exact (or near-exact) fits on data, deep models should place less energy in unidentifiable directions: smaller `model_nullX_norm = ||A_hat Q_x||_F`.
+
+H4. **Depth-sensitive optimization and scaling pathologies**  
+Deeper factorizations can be more sensitive to width/schedule and may amplify scale in unidentifiable directions despite tiny train loss.
+
+H5. **Bias terms may perturb but not necessarily destroy implicit bias**  
+Adding affine terms (`w`, `u`) could weaken or preserve the same qualitative preference.
+
+### What the data shows
+
+#### 1) Learnable support is fit extremely well in most regimes
+- In complete runs, many deep models reach `support_fit_err` around `1e-12` to `1e-14` (e.g., `Deep2(r=500)` often `~2e-14` to `8e-14`).
+- Shallow also fits support very well, but generally not as tightly (`~1e-6` to `1e-4` depending on init; sometimes better in specific runs with aggressive optimization).
+- Exception: narrow `Deep3(r=5)` frequently underfits or converges very slowly (e.g., `support_fit_err ~2.6` for `init_scale=1e-3,1e-2`; improves to `~4e-5` at `5e-2` in the complete sweep).
+
+Interpretation: H2 is strongly supported in broad regimes, but narrow 3-layer models can be optimization-limited.
+
+#### 2) Two-layer deep models usually suppress nullspace better than shallow
+- Representative values from complete sweep (`script_20260207_181928.log`):
+  - `init=1e-3`: `Deep2(r=500) model_nullX_norm=2.826` vs `Shallow=5.040`
+  - `init=1e-2`: `Deep2(r=500)=2.477` vs `Shallow=5.060`
+  - `init=5e-2`: `Deep2(r=500)=3.720` vs `Shallow=5.458`
+- Similar trend holds at `r=50,100` with `Deep2` usually around `~2.8-3.0`, below shallow `~5+`.
+
+Interpretation: H1/H3 supported for 2-layer factorization in this setup.
+
+#### 3) Three-layer very-wide models show strong nullspace inflation
+- `Deep3(r=500)` repeatedly yields large `model_nullX_norm`:
+  - `init=1e-3`: `~1.008e+01`
+  - `init=1e-2`: `~8.213e+00`
+  - `init=5e-2`: `~1.091e+01`
+- Yet `support_fit_err` is still tiny (`~1e-10` to `1e-11`), meaning these are near-interpolating but high-nullspace-mass solutions.
+- Spectra corroborate this: much larger tail/overall scale for `Deep3(r=500)` than `Deep2`.
+
+Interpretation: H4 strongly supported; depth can hurt implicit selection under current optimizer/schedule.
+
+#### 4) Bias variants (`Deep2OB`, `Deep2IOB`) preserve the good 2-layer behavior
+- From `script_20260207_191422.log` (`init=1e-3,1e-2` complete):
+  - `Deep2OB/Deep2IOB` achieve support errors comparable to unbiased `Deep2` (`~1e-14` to `1e-13` at larger widths).
+  - `model_nullX_norm` remains around the same favorable band (`~2.5-2.9` at larger widths), still much lower than shallow (`~5.0`).
+
+Interpretation: H5 supported. In this setting, adding inner/outer bias changes quantitative details but not the main qualitative implicit-bias outcome.
+
+#### 5) Why `rel_err`, `err_outside`, `err_null` stay large even with tiny train loss
+- In Experiment 2, `A*` has a large unlearnable component `A*Q_x` (`||A*Q_x||_F ~ 2.169e+01`).
+- So matrix-space errors that include the unidentifiable block cannot vanish from data alone.
+- This matches persistent `rel_err ~ 0.95-1.05` despite near-zero training loss and near-zero support-fit error.
+
+Interpretation: observed metrics are internally consistent; no implementation bug is indicated by this pattern.
+
+### Revised global conclusions
+
+1. **Core claim supported (with caveats):**  
+   Deep linear factorization (especially 2-layer) exhibits a favorable implicit bias in partially identifiable linear regression: it tends to fit the learnable component while using less nullspace mass than shallow linear.
+
+2. **Depth is not monotonic improvement:**  
+   3-layer models can be good at moderate widths but can become pathological at very large width (high nullspace norm, inflated spectra) under current optimization.
+
+3. **Bias terms are not the main failure mode:**  
+   Outer/inner bias additions to 2-layer models did not remove the low-nullspace behavior.
+
+4. **Optimization regime matters as much as architecture:**  
+   LR schedule, initialization scale, depth, and width jointly determine whether implicit regularization manifests cleanly.
+
+### Falsifiable next-step hypotheses (for follow-up runs)
+
+- NH1: Per-layer balancing or explicit norm control (e.g., mild weight decay or balanced initialization constraints) will reduce `Deep3(r=500)` nullspace inflation while preserving support fit.
+- NH2: Extending training time alone (without additional regularization) will **not** materially reduce `model_nullX_norm` for pathological `Deep3(r=500)` runs; it plateaus.
+- NH3: In noisy-label settings, 2-layer deep models should retain a stronger nullspace suppression gap versus shallow than 3-layer very-wide models.
+- NH4: Tracking per-factor Frobenius norms and their ratios will predict when `Deep3` enters high-nullspace interpolants before final convergence.
+
+### Plotting/artifact integrity
+
+- Smoke run (`outputs/run_20260208_012845/`) confirms singular-value history and multipanel spectrum plots are being written correctly.
+- This enables direct visual validation of mode-wise growth/plateau behavior in future full runs.
