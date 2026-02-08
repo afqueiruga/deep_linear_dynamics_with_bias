@@ -492,3 +492,49 @@
   - Increasing depth does not monotonically improve nullspace suppression in partially identifiable problems.
 - Practical implication for future experiments:
   - When comparing implicit bias across depths, control for optimization artifacts (step size, decay, possible regularization, and per-layer balancing diagnostics), otherwise “depth effect” may be confounded by unstable factor scaling.
+
+### Update: initialization-magnitude sweep case
+- Added a new Experiment 2 case to study how initialization scale affects nullspace/spectrum dynamics.
+- New config:
+  - `init_scale_values_lowX = [1e-3, 1e-2, 5e-2]`
+- For each noise setting (currently only `0.0`) and each init scale, the script now runs:
+  - `LowX-Deep2(r)` sweep over `r in [k, d, 2d, 10d]`
+  - `LowX-Deep3(r)` sweep over same widths
+  - `LowX-Shallow` with matching init std
+- Model constructors now use `init_scale` for all factor matrices (and shallow weight std).
+- Output labels include init scale (e.g., `s=1e-03`) so runs are separable in logs.
+
+Purpose:
+- Compare regimes where nullspace-associated singular values and `model_nullX_norm` grow/plateau/decay under different initial magnitudes.
+
+### Experiment outcome: initialization-scale sweep (no-noise)
+- Run file: `outputs/script_20260207_181928.log`
+- Settings:
+  - `init_scale_values_lowX = [1e-3, 1e-2, 5e-2]`
+  - `label_noise_std_lowX = 0.0`
+  - long no-noise schedule (`epochs=2000`).
+
+#### Key summary trends
+- **2-layer deep (`Deep2`) remains stable across init scales**:
+  - Support fit is excellent for medium/large widths (down to `~1e-14` to `1e-13`).
+  - `model_nullX_norm` stays in a relatively narrow band (`~2.48` to `~3.98` depending on width/scale).
+- **3-layer deep (`Deep3`) is more sensitive to init scale and width**:
+  - `r=5` underfits for small/medium scale (`support_fit_err ~2.6`), improves at `5e-2` (`~4e-5`) but still not as strong as deeper widths.
+  - `r=500` consistently develops large nullspace mass:
+    - `s=1e-3`: `model_nullX_norm ~1.008e+01`
+    - `s=1e-2`: `~8.213e+00`
+    - `s=5e-2`: `~1.091e+01`
+- **Shallow baseline**:
+  - `model_nullX_norm` stays around `~5.04` to `~5.46`.
+
+#### Nullspace singular-value behavior (growth vs decay)
+- For `Deep3(r=500)`, top/tail singular values **grow rapidly early** and then **plateau** at elevated levels (no meaningful decay by epoch 2000).
+  - Example (`s=1e-3`): `spec` grows from `6.7e-06` (epoch 0) to `~9.49` (epoch 100) and stays near `~9.49` at epoch 2000.
+  - Example (`s=1e-2`): `spec` grows from `~7.1e-03` to `~6.52` and plateaus.
+  - Example (`s=5e-2`): `spec` starts high (`~0.915`), spikes (`~9.99` at epoch 1), then settles near `~6.78`.
+- For `Deep2(r=500)`, singular values also grow early but settle into a lower-magnitude regime (`spec ~3.9–4.1`) with smaller nullspace norm.
+
+#### Interpretation
+- Initialization scale changes the regime, but in this setup it does **not** induce nullspace decay for the problematic `Deep3(r=500)` case; it mainly changes the plateau level after rapid growth.
+- The “low-rank implicit bias” appears robust for `Deep2`, while `Deep3` at large width is prone to high-norm nullspace solutions across scales.
+- The most promising region for controlled nullspace behavior here is moderate width/depth combinations (e.g., `Deep2` and `Deep3` with `r=50/100`) rather than very wide `Deep3`.
