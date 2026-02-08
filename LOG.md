@@ -758,3 +758,16 @@ The low-rank/low-complexity tendency appears strongest with more balanced factor
 
 5. Caution: this is one width (`r=100`) and one optimizer (Adam).  
 The direction is clear, but generalization requires the designed follow-ups above.
+
+### Repeat run (reproducibility check)
+
+- Repeat run ID: `outputs/run_20260208_125833/`
+- Command repeated exactly:
+  - `RUN_EXPERIMENT_2=0 RUN_EXPERIMENT_3=1 python3.11 script.py`
+- Final decomposition matched the prior run exactly (to printed precision):
+  - `Balanced: model_nullX_norm=2.683e+00`
+  - `WideOuter: model_nullX_norm=3.012e+00`
+  - `WideInner: model_nullX_norm=3.305e+00`
+  - `Shallow-Ref: model_nullX_norm=5.048e+00`
+
+Interpretation: with fixed random seeds and deterministic setup, this ablation is reproducible; the balancedness ordering appears robust in this controlled setting.
