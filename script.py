@@ -328,6 +328,7 @@ run_experiment_2 = env_flag("RUN_EXPERIMENT_2", True)
 run_experiment_3 = env_flag("RUN_EXPERIMENT_3", False)
 run_experiment_4 = env_flag("RUN_EXPERIMENT_4", False)
 run_experiment_5 = env_flag("RUN_EXPERIMENT_5", False)
+run_experiment_6 = env_flag("RUN_EXPERIMENT_6", False)
 # Label-noise options (set to >0 to enable additive Gaussian noise on Y).
 label_noise_std_exp1 = 0.0
 # Experiment-2-specific schedule to probe slow implicit regularization.
@@ -524,7 +525,7 @@ print(f"artifact_log={RUN_LOG_PATH}")
 print(
     f"run_experiment_1={run_experiment_1}, run_experiment_2={run_experiment_2}, "
     f"run_experiment_3={run_experiment_3}, run_experiment_4={run_experiment_4}, "
-    f"run_experiment_5={run_experiment_5}"
+    f"run_experiment_5={run_experiment_5}, run_experiment_6={run_experiment_6}"
 )
 
 if run_experiment_1:
@@ -1478,3 +1479,283 @@ if run_experiment_5:
         print(f"[saved] exp5 spectrum plot: {exp5_plot_path}")
 else:
     print("\nExperiment 5 is disabled (run_experiment_5=False).")
+
+# ----------------------------
+# Experiment 6
+# Follow-up: early-stage tiny WD + LR-decay sweep at fixed WD levels.
+# ----------------------------
+if run_experiment_6:
+    print("\n====================")
+    print("Experiment 6: early-WD schedule + LR-decay sweep")
+    print("====================")
+    exp6_r = 10 * d
+    exp6_init_scale = 1e-2
+    exp6_noise_std = 0.0
+    exp6_svd_every = 20
+    exp6_top_sv_every = 20
+    exp6_lr = 1e-2
+    exp6_epochs = 600
+    exp6_wd_gamma_grid = [
+        ("Deep3-Adam-WD1e-5-g995", 1e-5, 0.995),
+        ("Deep3-Adam-WD1e-5-g999", 1e-5, 0.999),
+        ("Deep3-Adam-WD3e-5-g995", 3e-5, 0.995),
+        ("Deep3-Adam-WD3e-5-g999", 3e-5, 0.999),
+    ]
+    exp6_stage_epochs = 150
+
+    Y_low_exp6 = X_low @ A_star_full.T
+    g_noise_exp6 = torch.Generator(device=device)
+    g_noise_exp6.manual_seed(7070)
+    Y_low_exp6 = add_label_noise(Y_low_exp6, exp6_noise_std, generator=g_noise_exp6)
+
+    exp6_results = {}
+    exp6_histories = {}
+    exp6_models = {}
+
+    for idx, (cond_name, cond_wd, cond_gamma) in enumerate(exp6_wd_gamma_grid):
+        model = DeepLinear3(d=d, m=m, r=exp6_r, init_scale=exp6_init_scale, device=device)
+        exp6_models[cond_name] = model
+        result = train_model(
+            name=f"{cond_name}(r={exp6_r})",
+            model=model,
+            get_A_fn=lambda model: model.end_to_end(),
+            X=X_low,
+            Y=Y_low_exp6,
+            A_star=A_star_full,
+            lr=exp6_lr,
+            optimizer_name="adam",
+            lr_decay_gamma=cond_gamma,
+            epochs=exp6_epochs,
+            batch_size=batch_size,
+            svd_every_epochs=exp6_svd_every,
+            rank_thresh=rank_thresh,
+            device=device,
+            P_left=P_left2,
+            P_right=P_right2,
+            P_left_perp=P_left2_perp,
+            P_right_perp=P_right2_perp,
+            model_null_proj=Q_x,
+            model_null_label="model_nullX_norm",
+            top_sv_every_epochs=exp6_top_sv_every,
+            top_sv_k=top_sv_k,
+            top_sv_method=top_sv_method_lowX,
+            weight_decay=cond_wd,
+            seed=1100 + idx,
+        )
+        exp6_results[cond_name] = result
+        exp6_histories[cond_name] = {
+            "epochs": result["sv_history_epochs"],
+            "sv": result["sv_history"],
+        }
+
+    # Schedule ablation:
+    # early-WD: WD first, then no-WD
+    # late-WD : no-WD first, then WD (control matched to prior suggestion)
+    early_name = "Deep3-Adam-2Stage-EarlyWD1e-5"
+    late_name = "Deep3-Adam-2Stage-LateWD1e-5"
+    model_early = DeepLinear3(d=d, m=m, r=exp6_r, init_scale=exp6_init_scale, device=device)
+    model_late = DeepLinear3(d=d, m=m, r=exp6_r, init_scale=exp6_init_scale, device=device)
+    exp6_models[early_name] = model_early
+    exp6_models[late_name] = model_late
+
+    early_stage1 = train_model(
+        name=f"{early_name}-stage1(r={exp6_r})",
+        model=model_early,
+        get_A_fn=lambda model: model.end_to_end(),
+        X=X_low,
+        Y=Y_low_exp6,
+        A_star=A_star_full,
+        lr=exp6_lr,
+        optimizer_name="adam",
+        lr_decay_gamma=0.995,
+        epochs=exp6_stage_epochs,
+        batch_size=batch_size,
+        svd_every_epochs=exp6_svd_every,
+        rank_thresh=rank_thresh,
+        device=device,
+        P_left=P_left2,
+        P_right=P_right2,
+        P_left_perp=P_left2_perp,
+        P_right_perp=P_right2_perp,
+        model_null_proj=Q_x,
+        model_null_label="model_nullX_norm",
+        top_sv_every_epochs=exp6_top_sv_every,
+        top_sv_k=top_sv_k,
+        top_sv_method=top_sv_method_lowX,
+        weight_decay=1e-5,
+        seed=1201,
+    )
+    early_stage2 = train_model(
+        name=f"{early_name}-stage2(r={exp6_r})",
+        model=model_early,
+        get_A_fn=lambda model: model.end_to_end(),
+        X=X_low,
+        Y=Y_low_exp6,
+        A_star=A_star_full,
+        lr=exp6_lr,
+        optimizer_name="adam",
+        lr_decay_gamma=0.995,
+        epochs=exp6_epochs - exp6_stage_epochs,
+        batch_size=batch_size,
+        svd_every_epochs=exp6_svd_every,
+        rank_thresh=rank_thresh,
+        device=device,
+        P_left=P_left2,
+        P_right=P_right2,
+        P_left_perp=P_left2_perp,
+        P_right_perp=P_right2_perp,
+        model_null_proj=Q_x,
+        model_null_label="model_nullX_norm",
+        top_sv_every_epochs=exp6_top_sv_every,
+        top_sv_k=top_sv_k,
+        top_sv_method=top_sv_method_lowX,
+        weight_decay=0.0,
+        seed=1202,
+    )
+    exp6_results[early_name] = early_stage2
+    early_shift = [e + exp6_stage_epochs for e in early_stage2["sv_history_epochs"]]
+    exp6_histories[early_name] = {
+        "epochs": early_stage1["sv_history_epochs"] + early_shift[1:],
+        "sv": early_stage1["sv_history"] + early_stage2["sv_history"][1:],
+    }
+
+    late_stage1 = train_model(
+        name=f"{late_name}-stage1(r={exp6_r})",
+        model=model_late,
+        get_A_fn=lambda model: model.end_to_end(),
+        X=X_low,
+        Y=Y_low_exp6,
+        A_star=A_star_full,
+        lr=exp6_lr,
+        optimizer_name="adam",
+        lr_decay_gamma=0.995,
+        epochs=exp6_epochs - exp6_stage_epochs,
+        batch_size=batch_size,
+        svd_every_epochs=exp6_svd_every,
+        rank_thresh=rank_thresh,
+        device=device,
+        P_left=P_left2,
+        P_right=P_right2,
+        P_left_perp=P_left2_perp,
+        P_right_perp=P_right2_perp,
+        model_null_proj=Q_x,
+        model_null_label="model_nullX_norm",
+        top_sv_every_epochs=exp6_top_sv_every,
+        top_sv_k=top_sv_k,
+        top_sv_method=top_sv_method_lowX,
+        weight_decay=0.0,
+        seed=1211,
+    )
+    late_stage2 = train_model(
+        name=f"{late_name}-stage2(r={exp6_r})",
+        model=model_late,
+        get_A_fn=lambda model: model.end_to_end(),
+        X=X_low,
+        Y=Y_low_exp6,
+        A_star=A_star_full,
+        lr=exp6_lr,
+        optimizer_name="adam",
+        lr_decay_gamma=0.995,
+        epochs=exp6_stage_epochs,
+        batch_size=batch_size,
+        svd_every_epochs=exp6_svd_every,
+        rank_thresh=rank_thresh,
+        device=device,
+        P_left=P_left2,
+        P_right=P_right2,
+        P_left_perp=P_left2_perp,
+        P_right_perp=P_right2_perp,
+        model_null_proj=Q_x,
+        model_null_label="model_nullX_norm",
+        top_sv_every_epochs=exp6_top_sv_every,
+        top_sv_k=top_sv_k,
+        top_sv_method=top_sv_method_lowX,
+        weight_decay=1e-5,
+        seed=1212,
+    )
+    exp6_results[late_name] = late_stage2
+    late_shift = [e + (exp6_epochs - exp6_stage_epochs) for e in late_stage2["sv_history_epochs"]]
+    exp6_histories[late_name] = {
+        "epochs": late_stage1["sv_history_epochs"] + late_shift[1:],
+        "sv": late_stage1["sv_history"] + late_stage2["sv_history"][1:],
+    }
+
+    shallow_ref_exp6 = nn.Linear(d, m, bias=False, device=device)
+    with torch.no_grad():
+        nn.init.normal_(shallow_ref_exp6.weight, mean=0.0, std=exp6_init_scale)
+    shallow_ref_exp6_result = train_model(
+        name="Shallow-Ref-Exp6",
+        model=shallow_ref_exp6,
+        get_A_fn=lambda model: model.weight,
+        X=X_low,
+        Y=Y_low_exp6,
+        A_star=A_star_full,
+        lr=exp6_lr,
+        optimizer_name="adam",
+        lr_decay_gamma=0.995,
+        epochs=exp6_epochs,
+        batch_size=batch_size,
+        svd_every_epochs=exp6_svd_every,
+        rank_thresh=rank_thresh,
+        device=device,
+        P_left=P_left2,
+        P_right=P_right2,
+        P_left_perp=P_left2_perp,
+        P_right_perp=P_right2_perp,
+        model_null_proj=Q_x,
+        model_null_label="model_nullX_norm",
+        top_sv_every_epochs=exp6_top_sv_every,
+        top_sv_k=top_sv_k,
+        top_sv_method=top_sv_method_lowX,
+        seed=1299,
+    )
+    exp6_results["Shallow-Ref-Exp6"] = shallow_ref_exp6_result
+    exp6_histories["Shallow-Ref-Exp6"] = {
+        "epochs": shallow_ref_exp6_result["sv_history_epochs"],
+        "sv": shallow_ref_exp6_result["sv_history"],
+    }
+
+    print("\n[Experiment 6 final decomposition]")
+    for cond_name, _, _ in exp6_wd_gamma_grid:
+        A_hat = exp6_models[cond_name].end_to_end()
+        print(
+            "{} support_fit_err={:.3e} learnable_target_err={:.3e} model_nullX_norm={:.3e}".format(
+                cond_name,
+                ((A_hat - A_star_full) @ P_x).norm().item(),
+                (A_hat @ P_x - A_star_learnable).norm().item(),
+                (A_hat @ Q_x).norm().item(),
+            )
+        )
+    for cond_name in [early_name, late_name]:
+        A_hat = exp6_models[cond_name].end_to_end()
+        print(
+            "{} support_fit_err={:.3e} learnable_target_err={:.3e} model_nullX_norm={:.3e}".format(
+                cond_name,
+                ((A_hat - A_star_full) @ P_x).norm().item(),
+                (A_hat @ P_x - A_star_learnable).norm().item(),
+                (A_hat @ Q_x).norm().item(),
+            )
+        )
+    A_hat_shallow_exp6 = shallow_ref_exp6.weight
+    print(
+        "Shallow-Ref-Exp6 support_fit_err={:.3e} learnable_target_err={:.3e} model_nullX_norm={:.3e}".format(
+            ((A_hat_shallow_exp6 - A_star_full) @ P_x).norm().item(),
+            (A_hat_shallow_exp6 @ P_x - A_star_learnable).norm().item(),
+            (A_hat_shallow_exp6 @ Q_x).norm().item(),
+        )
+    )
+
+    exp6_tag = slugify("exp6_deep3_schedule_and_decay_sweep")
+    exp6_data_path = RUN_OUTPUT_DIR / f"{exp6_tag}_singular_value_history.pt"
+    torch.save(exp6_histories, exp6_data_path)
+    exp6_plot_path = save_spectrum_plot(
+        histories=exp6_histories,
+        save_path=RUN_OUTPUT_DIR / f"{exp6_tag}_singular_value_evolution.png",
+        title="Experiment 6: Deep3 schedule + LR-decay sweep",
+        topk=top_sv_k,
+    )
+    print(f"[saved] exp6 spectra history: {exp6_data_path}")
+    if exp6_plot_path is not None:
+        print(f"[saved] exp6 spectrum plot: {exp6_plot_path}")
+else:
+    print("\nExperiment 6 is disabled (run_experiment_6=False).")

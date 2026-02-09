@@ -903,3 +903,65 @@ This is likely too aggressive if exact support interpolation is required.
 1. Try **early-stage tiny WD** rather than late-stage WD (reverse two-stage order) to avoid early basin lock-in.
 2. Keep `WD=1e-5` and `3e-5` as candidate operating points; sweep LR decay to improve support fit without sacrificing null suppression.
 3. Add explicit objective `loss + lambda * ||A Q_x||_F^2` and compare against plain WD at matched support error.
+
+## Experiment Design Cycle 4 (2026-02-08): Schedule order + LR-decay follow-through
+
+### Goal
+
+Directly execute the two pending ideas from Cycle 3:
+1. reverse the schedule order (early-WD then no-WD), and
+2. run LR-decay sweeps at `WD=1e-5` and `WD=3e-5`.
+
+### Executed experiment
+
+- Run ID: `outputs/run_20260208_205616/`
+- Command:
+  - `RUN_EXPERIMENT_2=0 RUN_EXPERIMENT_3=0 RUN_EXPERIMENT_4=0 RUN_EXPERIMENT_5=0 RUN_EXPERIMENT_6=1 python3.11 script.py`
+- Conditions:
+  - fixed-WD + gamma sweep:
+    - `WD=1e-5` with `gamma={0.995, 0.999}`
+    - `WD=3e-5` with `gamma={0.995, 0.999}`
+  - schedule sweep:
+    - early-WD: `WD=1e-5` for first 150 epochs then no-WD for 450
+    - late-WD: no-WD for first 450 then `WD=1e-5` for 150
+  - shallow reference.
+
+Artifacts:
+- log: `outputs/run_20260208_205616/script_20260208_205616.log`
+- history: `outputs/run_20260208_205616/exp6_deep3_schedule_and_decay_sweep_singular_value_history.pt`
+- plot: `outputs/run_20260208_205616/exp6_deep3_schedule_and_decay_sweep_singular_value_evolution.png`
+
+### Final decomposition summary
+
+- `Deep3-Adam-WD1e-5-g995`: `support_fit_err=2.905e-03`, `model_nullX_norm=2.060e+00`
+- `Deep3-Adam-WD1e-5-g999`: `2.329e-03`, `1.821e+00`
+- `Deep3-Adam-WD3e-5-g995`: `6.985e-03`, `1.707e+00`
+- `Deep3-Adam-WD3e-5-g999`: `6.020e-03`, `1.120e+00`
+- `Deep3-Adam-2Stage-EarlyWD1e-5`: `2.622e-10`, `3.789e+00`
+- `Deep3-Adam-2Stage-LateWD1e-5`: `3.136e-03`, `2.810e+00`
+- `Shallow-Ref-Exp6`: `1.456e-12`, `5.063e+00`
+
+### Interpretation (harder)
+
+1. **Slower LR decay (`gamma=0.999`) improved the Pareto point at fixed WD.**  
+For both WD levels, `gamma=0.999` gave lower support error and lower nullspace norm than `gamma=0.995`.
+
+2. **Best fixed-WD point in this cycle:**  
+`WD=3e-5, gamma=0.999` reached `model_nullX_norm=1.120` at `support_fit_err=6.020e-03`.  
+This clearly dominates `WD=3e-5, gamma=0.995` (`1.707`, `6.985e-03`).
+
+3. **Early-WD -> no-WD failed as a nullspace control strategy.**  
+It achieved near-perfect support fit (`2.622e-10`) but reverted to large nullspace norm (`3.789`), much worse than fixed-WD runs.  
+This indicates that turning off regularization allows subsequent drift into higher-nullspace interpolants.
+
+4. **Late-WD helps vs early-WD, but not enough.**  
+Late-WD ended at `model_nullX_norm=2.810`, better than early-WD (`3.789`) but much worse than fixed WD (`1.821` or `1.120`).
+
+5. **Practical takeaway:**  
+For deep3, maintaining some continuous regularization through training (and using slower decay) is better than staged on/off WD if the goal is low nullspace mass.
+
+### Updated next-step design
+
+1. Keep fixed-WD strategy; focus near `WD=3e-5, gamma=0.999` and nearby values.
+2. Implement explicit nullspace penalty term `lambda * ||A Q_x||_F^2` to test if we can push nullspace lower while recovering support error below `1e-3`.
+3. For fair comparison, tune `lambda` to match the same support error band as fixed-WD and compare resulting `model_nullX_norm`.
