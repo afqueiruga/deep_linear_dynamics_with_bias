@@ -326,6 +326,7 @@ rank_thresh = 1e-2
 run_experiment_1 = False  # disabled for efficiency; set True to re-enable
 run_experiment_2 = env_flag("RUN_EXPERIMENT_2", True)
 run_experiment_3 = env_flag("RUN_EXPERIMENT_3", False)
+run_experiment_4 = env_flag("RUN_EXPERIMENT_4", False)
 # Label-noise options (set to >0 to enable additive Gaussian noise on Y).
 label_noise_std_exp1 = 0.0
 # Experiment-2-specific schedule to probe slow implicit regularization.
@@ -376,12 +377,13 @@ def train_model(
     top_sv_every_epochs=None,
     top_sv_k=10,
     top_sv_method="exact",
+    weight_decay=0.0,
     seed=123,
 ):
     if optimizer_name.lower() == "sgd":
-        opt = optim.SGD(model.parameters(), lr=lr)
+        opt = optim.SGD(model.parameters(), lr=lr, weight_decay=weight_decay)
     elif optimizer_name.lower() == "adam":
-        opt = optim.Adam(model.parameters(), lr=lr)
+        opt = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     else:
         raise ValueError(f"Unknown optimizer_name={optimizer_name}")
     scheduler = optim.lr_scheduler.ExponentialLR(opt, gamma=lr_decay_gamma)
@@ -518,7 +520,10 @@ print(
 print(f"artifact_run_id={RUN_ID}")
 print(f"artifact_dir={RUN_OUTPUT_DIR}")
 print(f"artifact_log={RUN_LOG_PATH}")
-print(f"run_experiment_1={run_experiment_1}, run_experiment_2={run_experiment_2}, run_experiment_3={run_experiment_3}")
+print(
+    f"run_experiment_1={run_experiment_1}, run_experiment_2={run_experiment_2}, "
+    f"run_experiment_3={run_experiment_3}, run_experiment_4={run_experiment_4}"
+)
 
 if run_experiment_1:
     g_noise_exp1 = torch.Generator(device=device)
@@ -1121,3 +1126,140 @@ if run_experiment_3:
         print(f"[saved] exp3 spectrum plot: {exp3_plot_path}")
 else:
     print("\nExperiment 3 is disabled (run_experiment_3=False).")
+
+# ----------------------------
+# Experiment 4
+# Deep3 pathology check: optimizer + weight-decay ablation at large width.
+# ----------------------------
+if run_experiment_4:
+    print("\n====================")
+    print("Experiment 4: Deep3 optimizer/regularization ablation")
+    print("====================")
+    exp4_r = 10 * d
+    exp4_init_scale = 1e-2
+    exp4_epochs = 800
+    exp4_svd_every = 20
+    exp4_top_sv_every = 20
+    exp4_noise_std = 0.0
+    exp4_conditions = [
+        # name, optimizer, lr, gamma, weight_decay
+        ("Deep3-Adam-noWD", "adam", 1e-2, 0.995, 0.0),
+        ("Deep3-Adam-WD1e-4", "adam", 1e-2, 0.995, 1e-4),
+        ("Deep3-SGD-WD1e-4", "sgd", 5e-2, 0.999, 1e-4),
+    ]
+
+    Y_low_exp4 = X_low @ A_star_full.T
+    g_noise_exp4 = torch.Generator(device=device)
+    g_noise_exp4.manual_seed(5050)
+    Y_low_exp4 = add_label_noise(Y_low_exp4, exp4_noise_std, generator=g_noise_exp4)
+
+    exp4_results = {}
+    exp4_histories = {}
+    exp4_models = {}
+
+    for cond_name, cond_opt, cond_lr, cond_gamma, cond_wd in exp4_conditions:
+        model = DeepLinear3(d=d, m=m, r=exp4_r, init_scale=exp4_init_scale, device=device)
+        exp4_models[cond_name] = model
+        result = train_model(
+            name=f"{cond_name}(r={exp4_r})",
+            model=model,
+            get_A_fn=lambda model: model.end_to_end(),
+            X=X_low,
+            Y=Y_low_exp4,
+            A_star=A_star_full,
+            lr=cond_lr,
+            optimizer_name=cond_opt,
+            lr_decay_gamma=cond_gamma,
+            epochs=exp4_epochs,
+            batch_size=batch_size,
+            svd_every_epochs=exp4_svd_every,
+            rank_thresh=rank_thresh,
+            device=device,
+            P_left=P_left2,
+            P_right=P_right2,
+            P_left_perp=P_left2_perp,
+            P_right_perp=P_right2_perp,
+            model_null_proj=Q_x,
+            model_null_label="model_nullX_norm",
+            top_sv_every_epochs=exp4_top_sv_every,
+            top_sv_k=top_sv_k,
+            top_sv_method=top_sv_method_lowX,
+            weight_decay=cond_wd,
+            seed=777,
+        )
+        exp4_results[cond_name] = result
+        exp4_histories[cond_name] = {
+            "epochs": result["sv_history_epochs"],
+            "sv": result["sv_history"],
+        }
+
+    shallow_ref_exp4 = nn.Linear(d, m, bias=False, device=device)
+    with torch.no_grad():
+        nn.init.normal_(shallow_ref_exp4.weight, mean=0.0, std=exp4_init_scale)
+    shallow_ref_exp4_result = train_model(
+        name="Shallow-Ref-Exp4",
+        model=shallow_ref_exp4,
+        get_A_fn=lambda model: model.weight,
+        X=X_low,
+        Y=Y_low_exp4,
+        A_star=A_star_full,
+        lr=1e-2,
+        optimizer_name="adam",
+        lr_decay_gamma=0.995,
+        epochs=exp4_epochs,
+        batch_size=batch_size,
+        svd_every_epochs=exp4_svd_every,
+        rank_thresh=rank_thresh,
+        device=device,
+        P_left=P_left2,
+        P_right=P_right2,
+        P_left_perp=P_left2_perp,
+        P_right_perp=P_right2_perp,
+        model_null_proj=Q_x,
+        model_null_label="model_nullX_norm",
+        top_sv_every_epochs=exp4_top_sv_every,
+        top_sv_k=top_sv_k,
+        top_sv_method=top_sv_method_lowX,
+        seed=888,
+    )
+    exp4_results["Shallow-Ref-Exp4"] = shallow_ref_exp4_result
+    exp4_histories["Shallow-Ref-Exp4"] = {
+        "epochs": shallow_ref_exp4_result["sv_history_epochs"],
+        "sv": shallow_ref_exp4_result["sv_history"],
+    }
+
+    print("\n[Experiment 4 final decomposition]")
+    for cond_name, *_ in exp4_conditions:
+        A_hat = exp4_models[cond_name].end_to_end()
+        support_fit_err = ((A_hat - A_star_full) @ P_x).norm().item()
+        learnable_target_err = (A_hat @ P_x - A_star_learnable).norm().item()
+        model_nullX_norm = (A_hat @ Q_x).norm().item()
+        print(
+            "{} support_fit_err={:.3e} learnable_target_err={:.3e} model_nullX_norm={:.3e}".format(
+                cond_name, support_fit_err, learnable_target_err, model_nullX_norm
+            )
+        )
+
+    A_hat_shallow_exp4 = shallow_ref_exp4.weight
+    print(
+        "Shallow-Ref-Exp4 support_fit_err={:.3e} learnable_target_err={:.3e} model_nullX_norm={:.3e}".format(
+            ((A_hat_shallow_exp4 - A_star_full) @ P_x).norm().item(),
+            (A_hat_shallow_exp4 @ P_x - A_star_learnable).norm().item(),
+            (A_hat_shallow_exp4 @ Q_x).norm().item(),
+        )
+    )
+
+    exp4_tag = slugify("exp4_deep3_optimizer_weight_decay")
+    exp4_data_path = RUN_OUTPUT_DIR / f"{exp4_tag}_singular_value_history.pt"
+    torch.save(exp4_histories, exp4_data_path)
+    exp4_plot_path = save_spectrum_plot(
+        histories=exp4_histories,
+        save_path=RUN_OUTPUT_DIR / f"{exp4_tag}_singular_value_evolution.png",
+        title="Experiment 4: Deep3 Optimizer/WD Ablation",
+        topk=top_sv_k,
+    )
+    print(f"[saved] exp4 spectra history: {exp4_data_path}")
+    if exp4_plot_path is not None:
+        print(f"[saved] exp4 spectrum plot: {exp4_plot_path}")
+else:
+    print("\nExperiment 4 is disabled (run_experiment_4=False).")

@@ -771,3 +771,71 @@ The direction is clear, but generalization requires the designed follow-ups abov
   - `Shallow-Ref: model_nullX_norm=5.048e+00`
 
 Interpretation: with fixed random seeds and deterministic setup, this ablation is reproducible; the balancedness ordering appears robust in this controlled setting.
+
+## Experiment Design Cycle 2 (2026-02-08): Deep3 regularization frontier
+
+### Why this cycle
+
+A key unresolved question was whether the previously observed deep3 nullspace inflation is:
+1. an unavoidable property of deep3 factorization, or
+2. a controllable optimization/regularization artifact.
+
+### New hypotheses (cycle 2)
+
+- CH1: Mild explicit regularization (weight decay) can reduce `Deep3` nullspace mass `||A_hat Q_x||_F`.
+- CH2: There is a Pareto frontier: stronger null suppression may come at cost of support fit.
+- CH3: Optimizer choice can dominate this tradeoff (Adam vs SGD can land in very different regions).
+
+### Executed experiment
+
+- Run ID: `outputs/run_20260208_153813/`
+- Command:
+  - `RUN_EXPERIMENT_2=0 RUN_EXPERIMENT_3=0 RUN_EXPERIMENT_4=1 python3.11 script.py`
+- Setting:
+  - low-rank-input identifiability setup (`A*` full-rank, `X` low-rank).
+  - model width fixed at `Deep3(r=500)` (problematic regime from earlier logs).
+  - compared:
+    - `Deep3-Adam-noWD`
+    - `Deep3-Adam-WD1e-4`
+    - `Deep3-SGD-WD1e-4`
+  - plus `Shallow-Ref-Exp4`.
+
+### Final outcomes
+
+- `Deep3-Adam-noWD`
+  - `support_fit_err=1.582e-14`
+  - `model_nullX_norm=2.859e+00`
+- `Deep3-Adam-WD1e-4`
+  - `support_fit_err=1.992e-02`
+  - `model_nullX_norm=9.933e-01`
+- `Deep3-SGD-WD1e-4`
+  - `support_fit_err=6.982e+00`
+  - `model_nullX_norm=2.451e-02`
+- `Shallow-Ref-Exp4`
+  - `support_fit_err=2.272e-13`
+  - `model_nullX_norm=5.067e+00`
+
+Artifacts:
+- log: `outputs/run_20260208_153813/script_20260208_153813.log`
+- history: `outputs/run_20260208_153813/exp4_deep3_optimizer_weight_decay_singular_value_history.pt`
+- plot: `outputs/run_20260208_153813/exp4_deep3_optimizer_weight_decay_singular_value_evolution.png`
+
+### Interpretation
+
+1. **CH1 supported**: adding weight decay to deep3 can substantially reduce nullspace energy (`2.859 -> 0.993` under Adam).
+2. **CH2 strongly supported**: this reduction came with support underfitting (`~2e-2` instead of `~1e-14`).
+3. **CH3 supported**: optimizer/regularizer interaction is dominant.
+   - SGD + WD pushes nullspace near zero but catastrophically underfits support.
+   - Adam + no WD fits support perfectly but keeps moderate nullspace mass.
+4. The results suggest a **regularization frontier**, not a single winner:
+   - low support error / moderate nullspace (`Adam-noWD`)
+   - moderate support error / low nullspace (`Adam-WD1e-4`)
+   - poor support error / extremely low nullspace (`SGD-WD1e-4`)
+
+### Design implications for next cycle
+
+To locate a practically useful point on the frontier, sweep weaker regularization and late-phase scheduling instead of fixed WD:
+
+1. Adam + WD grid: `wd in {1e-6, 3e-6, 1e-5, 3e-5, 1e-4}`.
+2. Two-stage schedule: train no-WD to near-zero support error, then enable tiny WD for a short fine-tuning phase.
+3. Optional projector penalty test: add `lambda * ||A Q_x||_F^2` directly to objective for controlled nullspace suppression while tracking support-fit degradation.
