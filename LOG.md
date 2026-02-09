@@ -965,3 +965,73 @@ For deep3, maintaining some continuous regularization through training (and usin
 1. Keep fixed-WD strategy; focus near `WD=3e-5, gamma=0.999` and nearby values.
 2. Implement explicit nullspace penalty term `lambda * ||A Q_x||_F^2` to test if we can push nullspace lower while recovering support error below `1e-3`.
 3. For fair comparison, tune `lambda` to match the same support error band as fixed-WD and compare resulting `model_nullX_norm`.
+
+## Experiment Design Cycle 5 (2026-02-08): Explicit nullspace penalty vs WD
+
+### Goal
+
+Execute the pending objective-level control:
+`loss = MSE + lambda * ||A Q_x||_F^2`, and compare directly to the best fixed-WD reference from Cycle 4.
+
+### Executed experiment
+
+- Run ID: `outputs/run_20260208_212538/`
+- Command:
+  - `RUN_EXPERIMENT_2=0 RUN_EXPERIMENT_3=0 RUN_EXPERIMENT_4=0 RUN_EXPERIMENT_5=0 RUN_EXPERIMENT_6=0 RUN_EXPERIMENT_7=1 python3.11 script.py`
+- Compared:
+  - baseline `Deep3-Adam-WD3e-5-g999-ref`
+  - explicit-penalty sweep `lambda in {1e-8, 3e-8, 1e-7, 3e-7, 1e-6}`
+  - shallow reference
+
+Artifacts:
+- log: `outputs/run_20260208_212538/script_20260208_212538.log`
+- history: `outputs/run_20260208_212538/exp7_deep3_explicit_null_penalty_singular_value_history.pt`
+- plot: `outputs/run_20260208_212538/exp7_deep3_explicit_null_penalty_singular_value_evolution.png`
+
+### Final decomposition summary
+
+- `Deep3-Adam-WD3e-5-g999-ref`:  
+  `support_fit_err=5.931e-03`, `model_nullX_norm=8.931e-01`
+- `NullPenalty1e-08`:  
+  `support_fit_err=2.374e-06`, `model_nullX_norm=2.881e+00`
+- `NullPenalty3e-08`:  
+  `support_fit_err=6.166e-06`, `model_nullX_norm=2.621e+00`
+- `NullPenalty1e-07`:  
+  `support_fit_err=1.518e-05`, `model_nullX_norm=2.126e+00`
+- `NullPenalty3e-07`:  
+  `support_fit_err=2.708e-05`, `model_nullX_norm=1.415e+00`
+- `NullPenalty1e-06`:  
+  `support_fit_err=2.176e-05`, `model_nullX_norm=5.301e-01`
+- `Shallow-Ref-Exp7`:  
+  `support_fit_err=1.100e-13`, `model_nullX_norm=5.093e+00`
+
+### Interpretation (harder)
+
+1. **Explicit penalty provides a strictly better frontier than fixed WD in this tested regime.**  
+At `lambda=1e-06`, we get both:
+`support_fit_err=2.176e-05` (much better than WD baseline `5.931e-03`) and
+`model_nullX_norm=5.301e-01` (also better than WD baseline `8.931e-01`).
+
+2. **The penalty sweep is smooth and controllable.**  
+As `lambda` increases, nullspace norm drops monotonically (`2.881 -> 0.530`) while support error remains very low (`~1e-5` order).  
+This is a far less punitive tradeoff than WD for deep3.
+
+3. **Mechanistic implication:**  
+Generic parameter shrinkage (WD) is not aligned with the identifiable-vs-unidentifiable decomposition.  
+A targeted function-space penalty on `A Q_x` better matches the objective we care about.
+
+4. **Deep3 can be steered into strongly null-suppressing solutions without sacrificing support fit.**  
+This weakens the previous narrative that deep3 must trade one for the other; with the right objective, it need not.
+
+### Updated hypothesis status
+
+- “Need continuous WD to control deep3 nullspace”:
+  **partially superseded** by stronger result using targeted penalty.
+- “Objective alignment matters more than generic regularization”:
+  **strongly supported**.
+
+### Next-cycle design
+
+1. Refine around `lambda=1e-6` (`3e-7, 1e-6, 3e-6`) and test stability across seeds.
+2. Add noisy-label runs with the same penalty to see if the dominance over WD persists out-of-distribution.
+3. Compare two-layer deep model under the same explicit penalty for architecture-level fairness.

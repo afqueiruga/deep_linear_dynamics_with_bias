@@ -329,6 +329,7 @@ run_experiment_3 = env_flag("RUN_EXPERIMENT_3", False)
 run_experiment_4 = env_flag("RUN_EXPERIMENT_4", False)
 run_experiment_5 = env_flag("RUN_EXPERIMENT_5", False)
 run_experiment_6 = env_flag("RUN_EXPERIMENT_6", False)
+run_experiment_7 = env_flag("RUN_EXPERIMENT_7", False)
 # Label-noise options (set to >0 to enable additive Gaussian noise on Y).
 label_noise_std_exp1 = 0.0
 # Experiment-2-specific schedule to probe slow implicit regularization.
@@ -380,6 +381,8 @@ def train_model(
     top_sv_k=10,
     top_sv_method="exact",
     weight_decay=0.0,
+    penalty_proj=None,
+    penalty_lambda=0.0,
     seed=123,
 ):
     if optimizer_name.lower() == "sgd":
@@ -449,6 +452,11 @@ def train_model(
             opt.zero_grad(set_to_none=True)
             yhat = model(xb)
             loss = loss_fn(yhat, yb)
+            if penalty_proj is not None and penalty_lambda > 0.0:
+                A_now = get_A_fn(model)
+                # Optional explicit nullspace regularizer: lambda * ||A P||_F^2.
+                penalty = (A_now @ penalty_proj).pow(2).sum()
+                loss = loss + penalty_lambda * penalty
             loss.backward()
             opt.step()
             loss_accum += loss.item()
@@ -525,7 +533,8 @@ print(f"artifact_log={RUN_LOG_PATH}")
 print(
     f"run_experiment_1={run_experiment_1}, run_experiment_2={run_experiment_2}, "
     f"run_experiment_3={run_experiment_3}, run_experiment_4={run_experiment_4}, "
-    f"run_experiment_5={run_experiment_5}, run_experiment_6={run_experiment_6}"
+    f"run_experiment_5={run_experiment_5}, run_experiment_6={run_experiment_6}, "
+    f"run_experiment_7={run_experiment_7}"
 )
 
 if run_experiment_1:
@@ -1759,3 +1768,177 @@ if run_experiment_6:
         print(f"[saved] exp6 spectrum plot: {exp6_plot_path}")
 else:
     print("\nExperiment 6 is disabled (run_experiment_6=False).")
+
+# ----------------------------
+# Experiment 7
+# Explicit nullspace penalty: loss + lambda * ||A Q_x||_F^2
+# Compare against fixed-WD baseline near matched support-error scale.
+# ----------------------------
+if run_experiment_7:
+    print("\n====================")
+    print("Experiment 7: explicit nullspace penalty sweep")
+    print("====================")
+    exp7_r = 10 * d
+    exp7_init_scale = 1e-2
+    exp7_noise_std = 0.0
+    exp7_epochs = 600
+    exp7_svd_every = 20
+    exp7_top_sv_every = 20
+    exp7_lr = 1e-2
+    exp7_gamma = 0.999
+    exp7_lambdas = [1e-8, 3e-8, 1e-7, 3e-7, 1e-6]
+
+    Y_low_exp7 = X_low @ A_star_full.T
+    g_noise_exp7 = torch.Generator(device=device)
+    g_noise_exp7.manual_seed(8080)
+    Y_low_exp7 = add_label_noise(Y_low_exp7, exp7_noise_std, generator=g_noise_exp7)
+
+    exp7_results = {}
+    exp7_histories = {}
+    exp7_models = {}
+
+    # Baseline reference from best observed WD regime in cycle 4.
+    baseline_name = "Deep3-Adam-WD3e-5-g999-ref"
+    baseline_model = DeepLinear3(d=d, m=m, r=exp7_r, init_scale=exp7_init_scale, device=device)
+    exp7_models[baseline_name] = baseline_model
+    baseline_result = train_model(
+        name=f"{baseline_name}(r={exp7_r})",
+        model=baseline_model,
+        get_A_fn=lambda model: model.end_to_end(),
+        X=X_low,
+        Y=Y_low_exp7,
+        A_star=A_star_full,
+        lr=exp7_lr,
+        optimizer_name="adam",
+        lr_decay_gamma=exp7_gamma,
+        epochs=exp7_epochs,
+        batch_size=batch_size,
+        svd_every_epochs=exp7_svd_every,
+        rank_thresh=rank_thresh,
+        device=device,
+        P_left=P_left2,
+        P_right=P_right2,
+        P_left_perp=P_left2_perp,
+        P_right_perp=P_right2_perp,
+        model_null_proj=Q_x,
+        model_null_label="model_nullX_norm",
+        top_sv_every_epochs=exp7_top_sv_every,
+        top_sv_k=top_sv_k,
+        top_sv_method=top_sv_method_lowX,
+        weight_decay=3e-5,
+        seed=1400,
+    )
+    exp7_results[baseline_name] = baseline_result
+    exp7_histories[baseline_name] = {
+        "epochs": baseline_result["sv_history_epochs"],
+        "sv": baseline_result["sv_history"],
+    }
+
+    for i, lam in enumerate(exp7_lambdas):
+        cond_name = f"Deep3-Adam-NullPenalty{lam:.0e}"
+        model = DeepLinear3(d=d, m=m, r=exp7_r, init_scale=exp7_init_scale, device=device)
+        exp7_models[cond_name] = model
+        result = train_model(
+            name=f"{cond_name}(r={exp7_r})",
+            model=model,
+            get_A_fn=lambda model: model.end_to_end(),
+            X=X_low,
+            Y=Y_low_exp7,
+            A_star=A_star_full,
+            lr=exp7_lr,
+            optimizer_name="adam",
+            lr_decay_gamma=exp7_gamma,
+            epochs=exp7_epochs,
+            batch_size=batch_size,
+            svd_every_epochs=exp7_svd_every,
+            rank_thresh=rank_thresh,
+            device=device,
+            P_left=P_left2,
+            P_right=P_right2,
+            P_left_perp=P_left2_perp,
+            P_right_perp=P_right2_perp,
+            model_null_proj=Q_x,
+            model_null_label="model_nullX_norm",
+            top_sv_every_epochs=exp7_top_sv_every,
+            top_sv_k=top_sv_k,
+            top_sv_method=top_sv_method_lowX,
+            weight_decay=0.0,
+            penalty_proj=Q_x,
+            penalty_lambda=lam,
+            seed=1410 + i,
+        )
+        exp7_results[cond_name] = result
+        exp7_histories[cond_name] = {
+            "epochs": result["sv_history_epochs"],
+            "sv": result["sv_history"],
+        }
+
+    shallow_ref_exp7 = nn.Linear(d, m, bias=False, device=device)
+    with torch.no_grad():
+        nn.init.normal_(shallow_ref_exp7.weight, mean=0.0, std=exp7_init_scale)
+    shallow_ref_exp7_result = train_model(
+        name="Shallow-Ref-Exp7",
+        model=shallow_ref_exp7,
+        get_A_fn=lambda model: model.weight,
+        X=X_low,
+        Y=Y_low_exp7,
+        A_star=A_star_full,
+        lr=exp7_lr,
+        optimizer_name="adam",
+        lr_decay_gamma=exp7_gamma,
+        epochs=exp7_epochs,
+        batch_size=batch_size,
+        svd_every_epochs=exp7_svd_every,
+        rank_thresh=rank_thresh,
+        device=device,
+        P_left=P_left2,
+        P_right=P_right2,
+        P_left_perp=P_left2_perp,
+        P_right_perp=P_right2_perp,
+        model_null_proj=Q_x,
+        model_null_label="model_nullX_norm",
+        top_sv_every_epochs=exp7_top_sv_every,
+        top_sv_k=top_sv_k,
+        top_sv_method=top_sv_method_lowX,
+        seed=1499,
+    )
+    exp7_results["Shallow-Ref-Exp7"] = shallow_ref_exp7_result
+    exp7_histories["Shallow-Ref-Exp7"] = {
+        "epochs": shallow_ref_exp7_result["sv_history_epochs"],
+        "sv": shallow_ref_exp7_result["sv_history"],
+    }
+
+    print("\n[Experiment 7 final decomposition]")
+    for name in [baseline_name] + [f"Deep3-Adam-NullPenalty{lam:.0e}" for lam in exp7_lambdas]:
+        A_hat = exp7_models[name].end_to_end()
+        print(
+            "{} support_fit_err={:.3e} learnable_target_err={:.3e} model_nullX_norm={:.3e}".format(
+                name,
+                ((A_hat - A_star_full) @ P_x).norm().item(),
+                (A_hat @ P_x - A_star_learnable).norm().item(),
+                (A_hat @ Q_x).norm().item(),
+            )
+        )
+    A_hat_shallow_exp7 = shallow_ref_exp7.weight
+    print(
+        "Shallow-Ref-Exp7 support_fit_err={:.3e} learnable_target_err={:.3e} model_nullX_norm={:.3e}".format(
+            ((A_hat_shallow_exp7 - A_star_full) @ P_x).norm().item(),
+            (A_hat_shallow_exp7 @ P_x - A_star_learnable).norm().item(),
+            (A_hat_shallow_exp7 @ Q_x).norm().item(),
+        )
+    )
+
+    exp7_tag = slugify("exp7_deep3_explicit_null_penalty")
+    exp7_data_path = RUN_OUTPUT_DIR / f"{exp7_tag}_singular_value_history.pt"
+    torch.save(exp7_histories, exp7_data_path)
+    exp7_plot_path = save_spectrum_plot(
+        histories=exp7_histories,
+        save_path=RUN_OUTPUT_DIR / f"{exp7_tag}_singular_value_evolution.png",
+        title="Experiment 7: Deep3 explicit nullspace penalty",
+        topk=top_sv_k,
+    )
+    print(f"[saved] exp7 spectra history: {exp7_data_path}")
+    if exp7_plot_path is not None:
+        print(f"[saved] exp7 spectrum plot: {exp7_plot_path}")
+else:
+    print("\nExperiment 7 is disabled (run_experiment_7=False).")
