@@ -327,6 +327,7 @@ run_experiment_1 = False  # disabled for efficiency; set True to re-enable
 run_experiment_2 = env_flag("RUN_EXPERIMENT_2", True)
 run_experiment_3 = env_flag("RUN_EXPERIMENT_3", False)
 run_experiment_4 = env_flag("RUN_EXPERIMENT_4", False)
+run_experiment_5 = env_flag("RUN_EXPERIMENT_5", False)
 # Label-noise options (set to >0 to enable additive Gaussian noise on Y).
 label_noise_std_exp1 = 0.0
 # Experiment-2-specific schedule to probe slow implicit regularization.
@@ -522,7 +523,8 @@ print(f"artifact_dir={RUN_OUTPUT_DIR}")
 print(f"artifact_log={RUN_LOG_PATH}")
 print(
     f"run_experiment_1={run_experiment_1}, run_experiment_2={run_experiment_2}, "
-    f"run_experiment_3={run_experiment_3}, run_experiment_4={run_experiment_4}"
+    f"run_experiment_3={run_experiment_3}, run_experiment_4={run_experiment_4}, "
+    f"run_experiment_5={run_experiment_5}"
 )
 
 if run_experiment_1:
@@ -1263,3 +1265,216 @@ if run_experiment_4:
         print(f"[saved] exp4 spectrum plot: {exp4_plot_path}")
 else:
     print("\nExperiment 4 is disabled (run_experiment_4=False).")
+
+# ----------------------------
+# Experiment 5
+# Deep3 Pareto sweep: Adam WD grid + two-stage noWD->tinyWD.
+# ----------------------------
+if run_experiment_5:
+    print("\n====================")
+    print("Experiment 5: Deep3 Pareto sweep (WD grid + two-stage)")
+    print("====================")
+    exp5_r = 10 * d
+    exp5_init_scale = 1e-2
+    exp5_noise_std = 0.0
+    exp5_svd_every = 20
+    exp5_top_sv_every = 20
+    exp5_lr = 1e-2
+    exp5_gamma = 0.995
+    exp5_epochs_single = 600
+    exp5_stage1_epochs = 450
+    exp5_stage2_epochs = 150
+    exp5_wd_grid = [1e-6, 3e-6, 1e-5, 3e-5, 1e-4]
+
+    Y_low_exp5 = X_low @ A_star_full.T
+    g_noise_exp5 = torch.Generator(device=device)
+    g_noise_exp5.manual_seed(6060)
+    Y_low_exp5 = add_label_noise(Y_low_exp5, exp5_noise_std, generator=g_noise_exp5)
+
+    exp5_results = {}
+    exp5_histories = {}
+    exp5_models = {}
+
+    for wd in exp5_wd_grid:
+        cond_name = f"Deep3-Adam-WD{wd:.0e}"
+        model = DeepLinear3(d=d, m=m, r=exp5_r, init_scale=exp5_init_scale, device=device)
+        exp5_models[cond_name] = model
+        result = train_model(
+            name=f"{cond_name}(r={exp5_r})",
+            model=model,
+            get_A_fn=lambda model: model.end_to_end(),
+            X=X_low,
+            Y=Y_low_exp5,
+            A_star=A_star_full,
+            lr=exp5_lr,
+            optimizer_name="adam",
+            lr_decay_gamma=exp5_gamma,
+            epochs=exp5_epochs_single,
+            batch_size=batch_size,
+            svd_every_epochs=exp5_svd_every,
+            rank_thresh=rank_thresh,
+            device=device,
+            P_left=P_left2,
+            P_right=P_right2,
+            P_left_perp=P_left2_perp,
+            P_right_perp=P_right2_perp,
+            model_null_proj=Q_x,
+            model_null_label="model_nullX_norm",
+            top_sv_every_epochs=exp5_top_sv_every,
+            top_sv_k=top_sv_k,
+            top_sv_method=top_sv_method_lowX,
+            weight_decay=wd,
+            seed=900 + int(abs(torch.log10(torch.tensor(wd)).item())),
+        )
+        exp5_results[cond_name] = result
+        exp5_histories[cond_name] = {
+            "epochs": result["sv_history_epochs"],
+            "sv": result["sv_history"],
+        }
+
+    # Two-stage continuation: prefit with no WD, then enable tiny WD.
+    twostage_name = "Deep3-Adam-2Stage(WD1e-5)"
+    model_twostage = DeepLinear3(d=d, m=m, r=exp5_r, init_scale=exp5_init_scale, device=device)
+    exp5_models[twostage_name] = model_twostage
+    stage1 = train_model(
+        name=f"{twostage_name}-stage1(r={exp5_r})",
+        model=model_twostage,
+        get_A_fn=lambda model: model.end_to_end(),
+        X=X_low,
+        Y=Y_low_exp5,
+        A_star=A_star_full,
+        lr=exp5_lr,
+        optimizer_name="adam",
+        lr_decay_gamma=exp5_gamma,
+        epochs=exp5_stage1_epochs,
+        batch_size=batch_size,
+        svd_every_epochs=exp5_svd_every,
+        rank_thresh=rank_thresh,
+        device=device,
+        P_left=P_left2,
+        P_right=P_right2,
+        P_left_perp=P_left2_perp,
+        P_right_perp=P_right2_perp,
+        model_null_proj=Q_x,
+        model_null_label="model_nullX_norm",
+        top_sv_every_epochs=exp5_top_sv_every,
+        top_sv_k=top_sv_k,
+        top_sv_method=top_sv_method_lowX,
+        weight_decay=0.0,
+        seed=977,
+    )
+    stage2 = train_model(
+        name=f"{twostage_name}-stage2(r={exp5_r})",
+        model=model_twostage,
+        get_A_fn=lambda model: model.end_to_end(),
+        X=X_low,
+        Y=Y_low_exp5,
+        A_star=A_star_full,
+        lr=exp5_lr,
+        optimizer_name="adam",
+        lr_decay_gamma=exp5_gamma,
+        epochs=exp5_stage2_epochs,
+        batch_size=batch_size,
+        svd_every_epochs=exp5_svd_every,
+        rank_thresh=rank_thresh,
+        device=device,
+        P_left=P_left2,
+        P_right=P_right2,
+        P_left_perp=P_left2_perp,
+        P_right_perp=P_right2_perp,
+        model_null_proj=Q_x,
+        model_null_label="model_nullX_norm",
+        top_sv_every_epochs=exp5_top_sv_every,
+        top_sv_k=top_sv_k,
+        top_sv_method=top_sv_method_lowX,
+        weight_decay=1e-5,
+        seed=978,
+    )
+    exp5_results[twostage_name] = stage2
+    stage2_epochs_shifted = [e + exp5_stage1_epochs for e in stage2["sv_history_epochs"]]
+    merged_epochs = stage1["sv_history_epochs"] + stage2_epochs_shifted[1:]
+    merged_sv = stage1["sv_history"] + stage2["sv_history"][1:]
+    exp5_histories[twostage_name] = {
+        "epochs": merged_epochs,
+        "sv": merged_sv,
+    }
+
+    shallow_ref_exp5 = nn.Linear(d, m, bias=False, device=device)
+    with torch.no_grad():
+        nn.init.normal_(shallow_ref_exp5.weight, mean=0.0, std=exp5_init_scale)
+    shallow_ref_exp5_result = train_model(
+        name="Shallow-Ref-Exp5",
+        model=shallow_ref_exp5,
+        get_A_fn=lambda model: model.weight,
+        X=X_low,
+        Y=Y_low_exp5,
+        A_star=A_star_full,
+        lr=exp5_lr,
+        optimizer_name="adam",
+        lr_decay_gamma=exp5_gamma,
+        epochs=exp5_epochs_single,
+        batch_size=batch_size,
+        svd_every_epochs=exp5_svd_every,
+        rank_thresh=rank_thresh,
+        device=device,
+        P_left=P_left2,
+        P_right=P_right2,
+        P_left_perp=P_left2_perp,
+        P_right_perp=P_right2_perp,
+        model_null_proj=Q_x,
+        model_null_label="model_nullX_norm",
+        top_sv_every_epochs=exp5_top_sv_every,
+        top_sv_k=top_sv_k,
+        top_sv_method=top_sv_method_lowX,
+        seed=990,
+    )
+    exp5_results["Shallow-Ref-Exp5"] = shallow_ref_exp5_result
+    exp5_histories["Shallow-Ref-Exp5"] = {
+        "epochs": shallow_ref_exp5_result["sv_history_epochs"],
+        "sv": shallow_ref_exp5_result["sv_history"],
+    }
+
+    print("\n[Experiment 5 final decomposition]")
+    for wd in exp5_wd_grid:
+        cond_name = f"Deep3-Adam-WD{wd:.0e}"
+        A_hat = exp5_models[cond_name].end_to_end()
+        support_fit_err = ((A_hat - A_star_full) @ P_x).norm().item()
+        learnable_target_err = (A_hat @ P_x - A_star_learnable).norm().item()
+        model_nullX_norm = (A_hat @ Q_x).norm().item()
+        print(
+            "{} support_fit_err={:.3e} learnable_target_err={:.3e} model_nullX_norm={:.3e}".format(
+                cond_name, support_fit_err, learnable_target_err, model_nullX_norm
+            )
+        )
+    A_hat_twostage = model_twostage.end_to_end()
+    print(
+        "{} support_fit_err={:.3e} learnable_target_err={:.3e} model_nullX_norm={:.3e}".format(
+            twostage_name,
+            ((A_hat_twostage - A_star_full) @ P_x).norm().item(),
+            (A_hat_twostage @ P_x - A_star_learnable).norm().item(),
+            (A_hat_twostage @ Q_x).norm().item(),
+        )
+    )
+    A_hat_shallow_exp5 = shallow_ref_exp5.weight
+    print(
+        "Shallow-Ref-Exp5 support_fit_err={:.3e} learnable_target_err={:.3e} model_nullX_norm={:.3e}".format(
+            ((A_hat_shallow_exp5 - A_star_full) @ P_x).norm().item(),
+            (A_hat_shallow_exp5 @ P_x - A_star_learnable).norm().item(),
+            (A_hat_shallow_exp5 @ Q_x).norm().item(),
+        )
+    )
+
+    exp5_tag = slugify("exp5_deep3_pareto_wd_sweep")
+    exp5_data_path = RUN_OUTPUT_DIR / f"{exp5_tag}_singular_value_history.pt"
+    torch.save(exp5_histories, exp5_data_path)
+    exp5_plot_path = save_spectrum_plot(
+        histories=exp5_histories,
+        save_path=RUN_OUTPUT_DIR / f"{exp5_tag}_singular_value_evolution.png",
+        title="Experiment 5: Deep3 WD Sweep + Two-Stage",
+        topk=top_sv_k,
+    )
+    print(f"[saved] exp5 spectra history: {exp5_data_path}")
+    if exp5_plot_path is not None:
+        print(f"[saved] exp5 spectrum plot: {exp5_plot_path}")
+else:
+    print("\nExperiment 5 is disabled (run_experiment_5=False).")

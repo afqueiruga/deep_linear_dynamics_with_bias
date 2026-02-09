@@ -839,3 +839,67 @@ To locate a practically useful point on the frontier, sweep weaker regularizatio
 1. Adam + WD grid: `wd in {1e-6, 3e-6, 1e-5, 3e-5, 1e-4}`.
 2. Two-stage schedule: train no-WD to near-zero support error, then enable tiny WD for a short fine-tuning phase.
 3. Optional projector penalty test: add `lambda * ||A Q_x||_F^2` directly to objective for controlled nullspace suppression while tracking support-fit degradation.
+
+## Experiment Design Cycle 3 (2026-02-08): Follow-through on WD frontier
+
+### Goal
+
+Execute the concrete follow-up from Cycle 2:
+1. map the Adam WD Pareto frontier at finer scale, and
+2. test whether two-stage noWD->tinyWD can improve the tradeoff over fixed-WD training.
+
+### Executed experiment
+
+- Run ID: `outputs/run_20260208_204932/`
+- Command:
+  - `RUN_EXPERIMENT_2=0 RUN_EXPERIMENT_3=0 RUN_EXPERIMENT_4=0 RUN_EXPERIMENT_5=1 python3.11 script.py`
+- Conditions:
+  - `Deep3(r=500)` + Adam with WD in `{1e-6, 3e-6, 1e-5, 3e-5, 1e-4}`
+  - Two-stage: no-WD prefit (`450` epochs) then `WD=1e-5` (`150` epochs)
+  - `Shallow-Ref-Exp5` baseline
+
+Artifacts:
+- log: `outputs/run_20260208_204932/script_20260208_204932.log`
+- history: `outputs/run_20260208_204932/exp5_deep3_pareto_wd_sweep_singular_value_history.pt`
+- plot: `outputs/run_20260208_204932/exp5_deep3_pareto_wd_sweep_singular_value_evolution.png`
+
+### Final decomposition summary (key table)
+
+- `Deep3-Adam-WD1e-06`: `support_fit_err=2.866e-04`, `model_nullX_norm=2.691e+00`
+- `Deep3-Adam-WD3e-06`: `support_fit_err=9.406e-04`, `model_nullX_norm=2.584e+00`
+- `Deep3-Adam-WD1e-05`: `support_fit_err=2.982e-03`, `model_nullX_norm=2.174e+00`
+- `Deep3-Adam-WD3e-05`: `support_fit_err=7.001e-03`, `model_nullX_norm=1.735e+00`
+- `Deep3-Adam-WD1e-04`: `support_fit_err=1.999e-02`, `model_nullX_norm=1.007e+00`
+- `Deep3-Adam-2Stage(WD1e-5)`: `support_fit_err=3.172e-03`, `model_nullX_norm=2.547e+00`
+- `Shallow-Ref-Exp5`: `support_fit_err=1.101e-12`, `model_nullX_norm=5.076e+00`
+
+### Interpretation (harder take)
+
+1. The frontier is smooth and monotone in this range.  
+As WD increases, nullspace norm drops, but support error rises. This is a clean regularization tradeoff, not noisy instability.
+
+2. There is a useful knee near `WD ~ 1e-5` to `3e-5`.  
+Compared with `WD=1e-6`, nullspace norm improves substantially (`2.691 -> 2.174` or `1.735`) while support error remains in the `1e-3` to `1e-2` regime.
+
+3. Two-stage did **not** dominate fixed-WD in this configuration.  
+`2Stage(WD1e-5)` ended with worse null suppression (`2.547`) than fixed `WD=1e-5` (`2.174`) at similar support error scale (`~3e-3`).  
+Interpretation: once the no-WD phase settles into a high-null basin, late small-WD may be too weak/late to re-shape it.
+
+4. Deep3 remains better than shallow in nullspace suppression across all tested WD points.  
+Even weakest WD (`1e-6`) gives `2.691` vs shallow `5.076`, while still retaining low support error (`2.866e-4`).
+
+5. Stronger regularization (`1e-4`) suppresses nullspace strongly (`1.007`) but starts to materially underfit support (`~2e-2`).  
+This is likely too aggressive if exact support interpolation is required.
+
+### Updated hypothesis status
+
+- CH1 (WD can reduce deep3 nullspace): **supported**
+- CH2 (support-vs-null Pareto frontier): **strongly supported**
+- CH3 (optimizer/regularization interaction matters): **supported** (from Cycle 2 + Cycle 3 together)
+- Two-stage noWD->tinyWD superiority: **not supported** in this tested schedule
+
+### Next-cycle design (concrete)
+
+1. Try **early-stage tiny WD** rather than late-stage WD (reverse two-stage order) to avoid early basin lock-in.
+2. Keep `WD=1e-5` and `3e-5` as candidate operating points; sweep LR decay to improve support fit without sacrificing null suppression.
+3. Add explicit objective `loss + lambda * ||A Q_x||_F^2` and compare against plain WD at matched support error.
